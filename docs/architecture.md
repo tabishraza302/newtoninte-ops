@@ -197,6 +197,8 @@ to `users`, so it needs two labelled lines, not one).
 erDiagram
   users ||--o{ memberships : "belongs to"
   teams ||--o{ memberships : "has members"
+  teams ||--o{ membership_events : "audits"
+  users ||--o{ membership_events : "actor"
   users ||--o{ invitations : "created_by"
   teams ||--o{ invitations : "issues"
   users ||--o{ refresh_tokens : "owns"
@@ -222,6 +224,16 @@ erDiagram
     bigint user_id FK
     bigint team_id FK
     varchar role "viewer | member | lead"
+  }
+  membership_events {
+    bigint id PK
+    bigint team_id FK
+    bigint actor_id FK
+    bigint subject_user_id FK
+    varchar action "joined | role_changed | removed"
+    varchar from_role
+    varchar to_role
+    datetime created_at
   }
   invitations {
     bigint id PK

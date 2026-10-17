@@ -243,6 +243,10 @@ Pure ASCII so it renders anywhere: cat docs/architecture.ascii.txt
      password_reset_tokens      (id, user_id, token_hash UK, expires_at, consumed_at)
      email_verification_tokens  (id, user_id, token_hash UK, expires_at, consumed_at)
 
+   Team-level audit (append-only, same txn as the change):
+     membership_events  (id, team_id, actor_id, subject_user_id,
+                         action, from_role, to_role, created_at)
+
    KEY CONSTRAINTS (invisible above):
      memberships        UNIQUE(user_id, team_id)
      idempotency_keys   UNIQUE(user_id, key)
