@@ -30,4 +30,10 @@ describe('middleware', () => {
     expect(res.status).toBe(403)
     expect(res.body.error).toEqual({ code: 'FORBIDDEN', message: 'no' })
   })
+  it('turns an unknown error into a generic 500 without leaking', async () => {
+    const res = await request(appWith(() => { throw new Error('do-not-leak') })).get('/boom')
+    expect(res.status).toBe(500)
+    expect(res.body.error.code).toBe('INTERNAL_ERROR')
+    expect(JSON.stringify(res.body)).not.toContain('do-not-leak')
+  })
 })

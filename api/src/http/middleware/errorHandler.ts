@@ -11,7 +11,12 @@ import { toEnvelope } from '../errors'
  * as an error handler rather than a normal middleware.
  */
 export function errorHandler(): ErrorRequestHandler {
-  return (err, _req, res, _next) => {
+  return (err, _req, res, next) => {
+    // The response has already started (e.g. a stream failed mid-flight):
+    // we cannot write a status/body without throwing ERR_HTTP_HEADERS_SENT and
+    // masking `err`, so let Express close the connection via the default handler.
+    if (res.headersSent) return next(err)
+
     const { status, body } = toEnvelope(err)
     // Unexpected failures are bugs: surface a trace server-side, but keep the
     // client-facing body generic.
