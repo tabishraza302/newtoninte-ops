@@ -180,8 +180,8 @@ sequenceDiagram
 ```
 
 Closed registration sits in front of this: an account can only be created by redeeming an
-invitation, and redemption is the same atomic compare-and-set as claiming an item (§8.8 of
-the design).
+email-bound invitation, and redemption is the same atomic compare-and-set as claiming an
+item (§8.8 of the design).
 
 ---
 
@@ -203,14 +203,12 @@ erDiagram
   teams ||--o{ invitations : "issues"
   users ||--o{ refresh_tokens : "owns"
   users ||--o{ password_reset_tokens : "requests"
-  users ||--o{ email_verification_tokens : "verifies"
 
   users {
     bigint id PK
     varchar email UK "lowercased"
     varchar password_hash "argon2id"
     varchar display_name
-    datetime email_verified_at "nullable"
     bool is_admin "seed-only, narrow (§7.1)"
     varchar status "active | disabled"
   }
@@ -239,7 +237,7 @@ erDiagram
     bigint id PK
     bigint team_id FK
     varchar role "viewer | member | lead"
-    varchar email "nullable → shareable code"
+    varchar email "required — invite is emailed here"
     varchar code_hash "sha256"
     int max_uses
     int uses "atomic compare-and-set (§8.8)"
@@ -257,13 +255,6 @@ erDiagram
     bigint replaced_by "rotation successor"
   }
   password_reset_tokens {
-    bigint id PK
-    bigint user_id FK
-    varchar token_hash UK
-    datetime expires_at
-    datetime consumed_at
-  }
-  email_verification_tokens {
     bigint id PK
     bigint user_id FK
     varchar token_hash UK
@@ -329,7 +320,7 @@ erDiagram
   }
   outbox_jobs {
     bigint id PK
-    varchar type "email.verify | email.reset | email.invite | email.assigned"
+    varchar type "email.reset | email.invite | email.assigned"
     json payload
     varchar status "pending | processing | done | failed"
     int attempts
@@ -388,7 +379,7 @@ Cancellation is allowed only from `open` / `in_progress` / `awaiting_approval`, 
 
 | Synchronous (in the request) | Asynchronous (outbox → worker) |
 |---|---|
-| Create / edit / claim / transition | Email: verify, reset, invite, assigned |
+| Create / edit / claim / transition | Email: reset, invite, assigned |
 | Authorization decision | (anything slow or external, later) |
 | Activity event write | |
 | Idempotency key + stored response | |

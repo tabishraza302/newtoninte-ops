@@ -182,7 +182,6 @@ Pure ASCII so it renders anywhere: cat docs/architecture.ascii.txt
    | id             PK      |
    | email          UK      |
    | password_hash  (argon2)|
-   | email_verified_at      |
    | is_admin   (seed-only) |
    | status                 |
    +-----------+------------+
@@ -195,8 +194,8 @@ Pure ASCII so it renders anywhere: cat docs/architecture.ascii.txt
 |---------------|  |----------------|  |---------------|  |--------------------|
 | id        PK  |  | id          PK |  | id         PK |  | id             PK  |
 | user_id   FK  |  | user_id     FK |  | team_id    FK |  | user_id        FK  |
-| team_id   FK  |  | token_hash  UK |  | email (null = |  | key  (UNIQUE with  |
-| role          |  | family_id      |  |   code invite)|  |       user_id)     |
+| team_id   FK  |  | token_hash  UK |  | email (bound)|  | key  (UNIQUE with  |
+| role          |  | family_id      |  |  (required)  |  |       user_id)     |
 +-------+-------+  | revoked_at     |  | role          |  | response_body      |
         |          | replaced_by    |  | max_uses/uses |  | expires_at         |
         | N:1      +----------------+  | expires_at    |  +--------------------+
@@ -244,9 +243,8 @@ Pure ASCII so it renders anywhere: cat docs/architecture.ascii.txt
    | dedupe_key, last_error              |
    +-------------------------------------+
 
-   Standalone token tables (same shape):
+   Standalone token table:
      password_reset_tokens      (id, user_id, token_hash UK, expires_at, consumed_at)
-     email_verification_tokens  (id, user_id, token_hash UK, expires_at, consumed_at)
 
    Team-level audit (append-only, same txn as the change):
      membership_events  (id, team_id, actor_id, subject_user_id,
@@ -293,10 +291,10 @@ Pure ASCII so it renders anywhere: cat docs/architecture.ascii.txt
 
    SYNCHRONOUS (in the request)          ASYNCHRONOUS (outbox -> worker)
    ------------------------------        ------------------------------------
-   create / edit / claim / transition    email.verify
-   authorization decision                email.reset
-   activity event write                  email.invite
-   idempotency key + stored response     email.assigned
+   create / edit / claim / transition    email.reset
+   authorization decision                email.invite
+   activity event write                  email.assigned
+   idempotency key + stored response
    outbox row insert
 
    If it must be consistent with the item -> synchronous.
