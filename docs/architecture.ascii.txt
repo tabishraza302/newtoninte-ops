@@ -23,8 +23,8 @@ Pure ASCII so it renders anywhere: cat docs/architecture.ascii.txt
   |   |  /auth      |    |  can(user,       |    |   claim        |    |   (Drizzle)      |    |
   |   |  /items     |    |   action,        |    |   assign       |    |                  |    |
   |   |  /teams     |    |   resource)      |    |   transition   |    |                  |    |
-  |   |  /invitations|   |  ONE place for   |    |   update       |    |                  |    |
-  |   +-------------+    |  all permissions |    |   invite/redeem|    |                  |    |
+  |   |  /invitations|   |  can() + scope() |    |   update       |    |                  |    |
+  |   +-------------+    |  ONE authz module|    |   invite/redeem|    |                  |    |
   |                      +------------------+    +----------------+    +---------+--------+    |
   |                                                                              |             |
   |   +--------------------------------+                                         |             |
@@ -56,7 +56,7 @@ Pure ASCII so it renders anywhere: cat docs/architecture.ascii.txt
    +--------+--------+
             v
    +-----------------+
-   |  Policy         |    can(user, action, resource)
+   |  Policy         |    can(user, action, resource)  +  scope(user)
    +--------+--------+
             |
       denied +----------------------------> 404 / 403  (error envelope)
@@ -85,6 +85,7 @@ Pure ASCII so it renders anywhere: cat docs/architecture.ascii.txt
    User B -----/                                     |       status='in_progress'|
                                                      |        version = version+1|
                                                      |  WHERE id = 42            |
+                                                     |    AND team_id = ?        |
                                                      |    AND status='open'      |
                                                      |    AND assignee_id IS NULL|
                                                      +-------------+-------------+
@@ -264,13 +265,14 @@ Pure ASCII so it renders anywhere: cat docs/architecture.ascii.txt
                         INDEX(assignee_id, status)
                         INDEX(team_id, assignee_id)
      activity_events    INDEX(work_item_id, id)   append-only, never updated
+     membership_events  INDEX(team_id, id)        append-only
 
 7. WORK ITEM LIFECYCLE
 ----------------------
 
    open --claim/start--> in_progress --submit--> awaiting_approval
-    |    (member; sets         ^                        |
-    |     assignee)            |                        | approve (LEAD ONLY)
+    |    (member) or start     ^                        |
+    |     (assignee)           |                        | approve (LEAD ONLY)
     |                          | send back (lead)       v
     |                          +------------------  resolved
     |                                                  |  |

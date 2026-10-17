@@ -14,7 +14,7 @@ flowchart LR
 
   subgraph API["API container — Bun + Express"]
     R["Routers<br/>/auth · /items · /teams · /invitations"]
-    P["Policy<br/>can(user, action, resource)"]
+    P["Policy module<br/>can(user, action, resource)<br/>+ scope(user)"]
     S["Services<br/>claim · assign · transition · update · invite · redeem"]
     RP["Repository — Drizzle"]
     W["Worker<br/>(poller)"]
@@ -43,7 +43,7 @@ for dev, movable to its own container in prod with no code change.
 flowchart TD
   REQ["HTTP request"] --> MW["Middleware<br/>auth · rate-limit · body parse"]
   MW --> ROUTE["Router"]
-  ROUTE --> POL["Policy: can(user, action, resource)<br/>reads memberships, decides allow/deny"]
+  ROUTE --> POL["Policy module: can(user, action, resource)<br/>+ scope(user) → team_id IN (…)<br/>reads memberships, decides allow/deny"]
   POL -->|denied| ERR["404 / 403 error envelope"]
   POL -->|allowed| SVC["Service<br/>opens ONE transaction"]
   SVC --> REPO["Repository (Drizzle)"]
@@ -80,13 +80,13 @@ sequenceDiagram
   end
 
   API->>DB: BEGIN
-  API->>DB: UPDATE work_items SET assignee_id=A, status='in_progress', version=version+1<br/>WHERE id=42 AND status='open' AND assignee_id IS NULL
+  API->>DB: UPDATE work_items SET assignee_id=A, status='in_progress', version=version+1<br/>WHERE id=42 AND team_id=? AND status='open' AND assignee_id IS NULL
   DB-->>API: 1 row affected
-  API->>DB: INSERT activity_event(assignee_changed)
+  API->>DB: INSERT activity_event(assignee_changed) + activity_event(status_changed)
   API->>DB: COMMIT
   API-->>A: 200 { assignee: A, status: in_progress, version: 8 }
 
-  API->>DB: UPDATE … WHERE id=42 AND status='open' AND assignee_id IS NULL
+  API->>DB: UPDATE … WHERE id=42 AND team_id=? AND status='open' AND assignee_id IS NULL
   DB-->>API: 0 rows affected
   API-->>B: 409 ALREADY_CLAIMED
 ```
@@ -305,7 +305,6 @@ erDiagram
     bigint author_id FK
     text body
     datetime created_at
-    datetime deleted_at "soft delete, nullable"
   }
   idempotency_keys {
     bigint id PK
@@ -348,6 +347,7 @@ coupling to one table's lifecycle.
 | `outbox_jobs` | `UNIQUE(dedupe_key)`, `INDEX(status, available_at, id)` |
 | `work_items` | `INDEX(team_id, status, priority)`, `INDEX(team_id, created_at, id)`, `INDEX(assignee_id, status)`, `INDEX(team_id, assignee_id)` |
 | `activity_events` | `INDEX(work_item_id, id)` — append-only, never updated |
+| `membership_events` | `INDEX(team_id, id)` — append-only |
 
 ---
 
@@ -356,7 +356,7 @@ coupling to one table's lifecycle.
 ```mermaid
 stateDiagram-v2
   [*] --> open
-  open --> in_progress : claim / start (member; also sets assignee)
+  open --> in_progress : claim (member) or start (assignee)
   open --> cancelled : cancel (creator or lead)
   in_progress --> awaiting_approval : submit (assignee or lead)
   in_progress --> cancelled : cancel (creator or lead)
