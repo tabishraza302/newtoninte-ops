@@ -1,0 +1,301 @@
+NEWTONITE OPERATIONS - ARCHITECTURE (ASCII)
+===========================================
+Companion to docs/architecture.md (Mermaid).
+Pure ASCII so it renders anywhere: cat docs/architecture.ascii.txt
+
+1. SYSTEM OVERVIEW
+------------------
+
+                        +---------------------------------------------------+
+                        |                     BROWSER                       |
+                        |   React SPA (Vite)  +  TanStack Query             |
+                        |   access JWT in memory                            |
+                        |   refresh cookie (httpOnly, Secure, SameSite=Lax) |
+                        +-------------------------+-------------------------+
+                                                  |
+                                     JSON over HTTPS
+                                                  |
+  +-----------------------------------------------v---------------------------------------------+
+  |                          API CONTAINER   (Bun + Express)                                    |
+  |                                                                                             |
+  |   +-------------+    +------------------+    +----------------+    +------------------+    |
+  |   |  Routers    | -> |  Policy          | -> |   Services     | -> |   Repository     |    |
+  |   |  /auth      |    |  can(user,       |    |   claim        |    |   (Drizzle)      |    |
+  |   |  /items     |    |   action,        |    |   assign       |    |                  |    |
+  |   |  /teams     |    |   resource)      |    |   transition   |    |                  |    |
+  |   |  /invitations|   |  ONE place for   |    |   update       |    |                  |    |
+  |   +-------------+    |  all permissions |    |   invite/redeem|    |                  |    |
+  |                      +------------------+    +----------------+    +---------+--------+    |
+  |                                                                              |             |
+  |   +--------------------------------+                                         |             |
+  |   |  Worker (poller loop)          |                                         |             |
+  |   |  SELECT ... FOR UPDATE         |                                         |             |
+  |   |            SKIP LOCKED         |                                         |             |
+  |   +---------------+----------------+                                         |             |
+  +-------------------|----------------------------------------------------------|-------------+
+                      |                                                          |
+                poll jobs                                          SQL (one txn per request)
+                      v                                                          v
+        +---------------------------+                        +-----------------------------+
+        |      SMTP PROVIDER        |                        |       MySQL 8 (InnoDB)      |
+        |  Resend (verified)        |                        |  ALL state lives here       |
+        |  Mailpit (dev / test)     |                        +-----------------------------+
+        +---------------------------+
+
+  API is STATELESS -> any number can run behind a load balancer.
+  Worker is a clean seam: same container in dev, its own container in prod.
+
+2. REQUEST PATH  (the one rule the codebase obeys)
+-------------------------------------------------
+
+   HTTP request
+        |
+        v
+   +-----------------+
+   |  Middleware     |    auth  .  rate-limit  .  body parse
+   +--------+--------+
+            v
+   +-----------------+
+   |  Policy         |    can(user, action, resource)
+   +--------+--------+
+            |
+      denied +----------------------------> 404 / 403  (error envelope)
+            | allowed
+            v
+   +--------------------------------------------------------------+
+   |  Service     ==== ONE TRANSACTION =========================== |
+   |                                                              |
+   |     1. business change      (UPDATE / INSERT)                |
+   |     2. INSERT activity_event                                 |
+   |     3. INSERT outbox_job    (only if a side effect is needed)|
+   |                                                              |
+   |     ======================== COMMIT ========================  |
+   +------------------------------+-------------------------------+
+                                  |
+                                  v
+                            HTTP response
+
+3. CONCURRENCY: TWO USERS CLAIM THE SAME ITEM
+---------------------------------------------
+
+   User A -----\
+                \                                    +---------------------------+
+                 +-->  POST /items/42/claim  -------> |  UPDATE work_items        |
+                /                                    |    SET assignee_id = A,   |
+   User B -----/                                     |        version = version+1|
+                                                     |  WHERE id = 42            |
+                                                     |    AND assignee_id IS NULL|
+                                                     +-------------+-------------+
+                                                                   |
+                              +------------------------------------+----------------------------+
+                              |                                                                 |
+                      1 row affected                                                  0 rows affected
+                              |                                                                 |
+                              v                                                                 v
+                    200 OK   (A owns it)                                            409 ALREADY_CLAIMED
+
+   No read-then-write window. The DATABASE picks the winner.
+
+4. ASYNC PATH: TRANSACTIONAL OUTBOX
+-----------------------------------
+
+   REQUEST (synchronous)                                    BACKGROUND (worker)
+
+   service txn
+   +----------------------------+
+   | UPDATE work_items          |
+   | INSERT activity_event      |
+   | INSERT outbox_jobs --------+-----------------+
+   |      (same COMMIT)         |                 |
+   +----------------------------+                 |
+                                                  |
+   respond 201 immediately                        |
+   (email NOT sent yet)                           |
+                                                  v
+                                     +---------------------------+
+                                     |  WORKER poll loop         |
+                                     |                           |
+                                     |  SELECT * FROM outbox_jobs|
+                                     |   WHERE status='pending'  |
+                                     |     AND available_at<=now |
+                                     |   ORDER BY id LIMIT 10    |
+                                     |   FOR UPDATE SKIP LOCKED  |
+                                     +-------------+-------------+
+                                                   |
+                                     +-------------v-------------+
+                                     |  mark 'processing'        |
+                                     |  send via SMTP (Nodemailer)|
+                                     +-------------+-------------+
+                                                   |
+                              +--------------------+--------------------+
+                              |                                         |
+                           success                                   failure
+                              |                                         |
+                              v                                         v
+                      status='done'                    attempts++ ;
+                                                       available_at = NOW() + backoff
+                                                       last_error = ...
+                                                       attempts >= max -> status='failed'
+                                                       (visible, never silently dropped)
+
+   Enqueue is atomic with the change. Delivery is AT-LEAST-ONCE;
+   dedupe_key makes the handler effectively once.
+
+5. AUTH: REFRESH ROTATION WITH REUSE DETECTION
+----------------------------------------------
+
+   Browser                 API                            MySQL
+      |                     |                               |
+      | POST /auth/refresh->|                               |
+      |   (cookie RT1)      | BEGIN                         |
+      |                     | SELECT ... FOR UPDATE ------->|
+      |                     |  (row for hash of RT1)        |
+      |                     |<------------------------------|
+      |                     |                               |
+      |              +------+--------+                      |
+      |              |  RT1 state?   |                      |
+      |              +------+--------+                      |
+      |                     |                               |
+      |       current ------+------- revoked                |
+      |          |                          |               |
+      |          v                          v               |
+      |    new RT2, revoke RT1        replaced < grace ago? |
+      |    COMMIT                           |               |
+      |          |                   +------+------+        |
+      |          |                  yes            no       |
+      |          |                   |              |       |
+      |          v                   v              v       |
+      |   200 + Set-Cookie RT2   200 (benign)   revoke ENTIRE family
+      |                                         401 UNAUTHENTICATED (theft)
+
+6. DATA MODEL
+-------------
+
+   +------------------------+
+   |         users          |
+   |------------------------|
+   | id             PK      |
+   | email          UK      |
+   | password_hash  (argon2)|
+   | email_verified_at      |
+   | is_admin   (seed-only) |
+   | status                 |
+   +-----------+------------+
+               |
+   +-----------+--------+---------------+-------------------+
+   | 1:N                | 1:N           | 1:N               | 1:N
+   v                    v               v                   v
++---------------+  +----------------+  +---------------+  +--------------------+
+| memberships   |  | refresh_tokens |  | invitations   |  | idempotency_keys   |
+|---------------|  |----------------|  |---------------|  |--------------------|
+| id        PK  |  | id          PK |  | id         PK |  | id             PK  |
+| user_id   FK  |  | user_id     FK |  | team_id    FK |  | user_id        FK  |
+| team_id   FK  |  | token_hash  UK |  | email (null = |  | key  (UNIQUE with  |
+| role          |  | family_id      |  |   code invite)|  |       user_id)     |
++-------+-------+  | revoked_at     |  | role          |  | response_body      |
+        |          | replaced_by    |  | max_uses/uses |  | expires_at         |
+        | N:1      +----------------+  | expires_at    |  +--------------------+
+        v                              +-------+-------+
++---------------+                              | N:1
+|    teams      |<-----------------------------+
+|---------------|
+| id        PK  |
+| slug      UK  |
++-------+-------+
+        | 1:N
+        v
++-----------------------------------+
+|            work_items             |
+|-----------------------------------|
+| id            PK                  |
+| team_id       FK                  |
+| title, description                |
+| type, priority, status            |
+| assignee_id   FK -> users  (0..1) |
+| created_by    FK -> users         |
+| due_at                            |
+| version   (optimistic lock)       |
++--------+-----------------+--------+
+         | 1:N             | 1:N
+         v                 v
++------------------+  +-----------------+
+| activity_events  |  |    comments     |
+|------------------|  |-----------------|
+| id           PK  |  | id           PK |
+| work_item_id FK  |  | work_item_id FK |
+| actor_id     FK  |  | author_id    FK |
+| type             |  | body            |
+| from/to value    |  | deleted_at      |
+| metadata (json)  |  +-----------------+
++------------------+
+
+   +-------------------------------------+
+   |            outbox_jobs              |    NO foreign keys by design.
+   |-------------------------------------|    References entities via JSON payload,
+   | id            PK                    |    so a job can be enqueued in the SAME
+   | type, payload, status               |    transaction as any change.
+   | attempts, max_attempts              |
+   | available_at, locked_at, locked_by  |
+   | dedupe_key, last_error              |
+   +-------------------------------------+
+
+   Standalone token tables (same shape):
+     password_reset_tokens      (id, user_id, token_hash UK, expires_at, consumed_at)
+     email_verification_tokens  (id, user_id, token_hash UK, expires_at, consumed_at)
+
+   KEY CONSTRAINTS (invisible above):
+     memberships        UNIQUE(user_id, team_id)
+     idempotency_keys   UNIQUE(user_id, key)
+     outbox_jobs        INDEX(status, available_at, id)
+     work_items         INDEX(team_id, status, priority)
+                        INDEX(team_id, created_at, id)
+                        INDEX(assignee_id, status)
+     activity_events    INDEX(work_item_id, id)   append-only, never updated
+
+7. WORK ITEM LIFECYCLE
+----------------------
+
+                                claim/start (member)
+               +-----------------------------------------------+
+               |                                               v
+          +---------+                                    +-------------+
+ [start]-> |  open   |                                    | in_progress |<------+
+          +----+----+                                    +------+------+       |
+               |                                       submit    |              |
+         cancel|                                     (member)    |              | reopen
+         (lead)|                                                 v              | (lead)
+               |                                       +--------------------+  |
+               |                                       | awaiting_approval  |  |
+               |                                       +----+----------+----+  |
+               |                                approve     |          | send back
+               |                             (LEAD ONLY)    |          | (lead)
+               |                                            v          +-------+
+               |                                     +-------------+   (back to
+               |                                     |  resolved   |    in_progress)
+               |                                     +------+------+
+               |                                      close |   | reopen (lead)
+               |                                       (lead)|   +--> in_progress
+               |                                            v
+               |                                     +-------------+
+               |                                     |   closed    | [end]
+               |                                     +-------------+
+               v
+          +-------------+
+          |  cancelled  | [end]
+          +-------------+
+
+   Every arrow writes an activity_event in the SAME transaction as the status change.
+
+8. SYNC vs ASYNC BOUNDARY
+-------------------------
+
+   SYNCHRONOUS (in the request)          ASYNCHRONOUS (outbox -> worker)
+   ------------------------------        ------------------------------------
+   create / edit / claim / transition    email.verify
+   authorization decision                email.reset
+   activity event write                  email.invite
+   idempotency key + stored response     email.assigned
+   outbox row insert
+
+   If it must be consistent with the item -> synchronous.
+   If it is a side effect that can fail and retry -> a job.
