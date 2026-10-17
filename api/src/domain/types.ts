@@ -29,6 +29,19 @@ export type ItemType = (typeof ITEM_TYPES)[number]
 export const OUTBOX_TYPES = ['email.reset', 'email.invite', 'email.assigned'] as const
 export type OutboxJobType = (typeof OUTBOX_TYPES)[number]
 
+export const ACTIVITY_TYPES = [
+  'created',
+  'status_changed',
+  'assignee_changed',
+  'priority_changed',
+  'type_changed',
+  'comment_added',
+  'due_changed',
+  'title_changed',
+  'description_changed',
+] as const
+export type ActivityType = (typeof ACTIVITY_TYPES)[number]
+
 /** The authenticated principal an action is attributed to. */
 export interface Actor {
   id: number
