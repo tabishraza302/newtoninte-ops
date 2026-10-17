@@ -1,0 +1,7 @@
+{
+  "name": "@newtonite/web", "private": true, "type": "module",
+  "scripts": {
+    "dev": "vite", "build": "tsc -b && vite build", "preview": "vite preview",
+    "typecheck": "tsc --noEmit", "test": "vitest run"
+  }
+}
