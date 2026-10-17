@@ -52,24 +52,36 @@ function numberSetting(
   const parsed = Number(raw)
   if (!Number.isFinite(parsed)) {
     errors.push(`${name} must be a finite number, got: ${raw}`)
-    return fallback
   }
   return parsed
 }
 
-function envBool(raw: string | undefined, fallback: boolean): boolean {
+function envBool(
+  env: Record<string, string | undefined>,
+  name: string,
+  fallback: boolean,
+  errors: string[],
+): boolean {
+  const raw = env[name]
   if (raw === undefined || raw.trim() === '') return fallback
   const value = raw.trim().toLowerCase()
   if (value === 'true' || value === '1') return true
   if (value === 'false' || value === '0') return false
+  errors.push(`${name} must be a boolean ('true' | '1' | 'false' | '0'), got: ${raw}`)
   return fallback
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
   const errors: string[] = []
 
+  // Validate/collect everything first; the throw decision comes after all checks.
+  const port = numberSetting(env, 'PORT', PORT_DEFAULT, errors)
   const databaseUrl = requireString(env, 'DATABASE_URL', errors)
   const jwtSecret = requireString(env, 'JWT_SECRET', errors)
+  const accessTtlSec = numberSetting(env, 'ACCESS_TOKEN_TTL_SEC', ACCESS_TOKEN_TTL_SEC_DEFAULT, errors)
+  const refreshTtlSec = numberSetting(env, 'REFRESH_TOKEN_TTL_SEC', REFRESH_TOKEN_TTL_SEC_DEFAULT, errors)
+  const refreshGraceSec = numberSetting(env, 'REFRESH_GRACE_SEC', REFRESH_GRACE_SEC_DEFAULT, errors)
+  const cookieSecure = envBool(env, 'COOKIE_SECURE', COOKIE_SECURE_DEFAULT, errors)
 
   const mailDriverRaw = env['MAIL_DRIVER']?.trim()
   let mailDriver: Config['mailDriver'] = MAIL_DRIVER_DEFAULT
@@ -81,27 +93,36 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     }
   }
 
+  const smtpUrl = env['SMTP_URL']?.trim() || SMTP_URL_DEFAULT
+  const mailFrom = env['MAIL_FROM']?.trim() || MAIL_FROM_DEFAULT
+  const appBaseUrl = env['APP_BASE_URL']?.trim() || APP_BASE_URL_DEFAULT
+  const inviteTtlDays = numberSetting(env, 'INVITE_TTL_DAYS', INVITE_TTL_DAYS_DEFAULT, errors)
+  const resetTtlSec = numberSetting(env, 'RESET_TTL_SEC', RESET_TTL_SEC_DEFAULT, errors)
+  const workerIntervalMs = numberSetting(env, 'WORKER_INTERVAL_MS', WORKER_INTERVAL_MS_DEFAULT, errors)
+  const workerBatchSize = numberSetting(env, 'WORKER_BATCH_SIZE', WORKER_BATCH_SIZE_DEFAULT, errors)
+  const idempotencyTtlSec = numberSetting(env, 'IDEMPOTENCY_TTL_SEC', IDEMPOTENCY_TTL_SEC_DEFAULT, errors)
+
   if (errors.length > 0) {
     throw new Error(`Invalid configuration:\n${errors.map((e) => `  - ${e}`).join('\n')}`)
   }
 
   return {
-    port: numberSetting(env, 'PORT', PORT_DEFAULT, errors),
+    port,
     databaseUrl,
     jwtSecret,
-    accessTtlSec: numberSetting(env, 'ACCESS_TOKEN_TTL_SEC', ACCESS_TOKEN_TTL_SEC_DEFAULT, errors),
-    refreshTtlSec: numberSetting(env, 'REFRESH_TOKEN_TTL_SEC', REFRESH_TOKEN_TTL_SEC_DEFAULT, errors),
-    refreshGraceSec: numberSetting(env, 'REFRESH_GRACE_SEC', REFRESH_GRACE_SEC_DEFAULT, errors),
-    cookieSecure: envBool(env['COOKIE_SECURE'], COOKIE_SECURE_DEFAULT),
+    accessTtlSec,
+    refreshTtlSec,
+    refreshGraceSec,
+    cookieSecure,
     mailDriver,
-    smtpUrl: env['SMTP_URL']?.trim() || SMTP_URL_DEFAULT,
-    mailFrom: env['MAIL_FROM']?.trim() || MAIL_FROM_DEFAULT,
-    inviteTtlDays: numberSetting(env, 'INVITE_TTL_DAYS', INVITE_TTL_DAYS_DEFAULT, errors),
-    resetTtlSec: numberSetting(env, 'RESET_TTL_SEC', RESET_TTL_SEC_DEFAULT, errors),
-    workerIntervalMs: numberSetting(env, 'WORKER_INTERVAL_MS', WORKER_INTERVAL_MS_DEFAULT, errors),
-    workerBatchSize: numberSetting(env, 'WORKER_BATCH_SIZE', WORKER_BATCH_SIZE_DEFAULT, errors),
-    idempotencyTtlSec: numberSetting(env, 'IDEMPOTENCY_TTL_SEC', IDEMPOTENCY_TTL_SEC_DEFAULT, errors),
-    appBaseUrl: env['APP_BASE_URL']?.trim() || APP_BASE_URL_DEFAULT,
+    smtpUrl,
+    mailFrom,
+    inviteTtlDays,
+    resetTtlSec,
+    workerIntervalMs,
+    workerBatchSize,
+    idempotencyTtlSec,
+    appBaseUrl,
   }
 }
 

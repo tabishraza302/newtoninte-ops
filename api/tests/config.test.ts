@@ -19,4 +19,10 @@ describe('loadConfig', () => {
   it('requires JWT_SECRET', () => {
     expect(() => loadConfig({ DATABASE_URL: 'mysql://x' })).toThrow()
   })
+  it('rejects an invalid numeric setting', () => {
+    expect(() => loadConfig({ ...base, PORT: 'abc' })).toThrow()
+  })
+  it('rejects an invalid boolean setting', () => {
+    expect(() => loadConfig({ ...base, COOKIE_SECURE: 'maybe' })).toThrow()
+  })
 })
