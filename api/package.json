@@ -23,5 +23,9 @@
     "supertest": "^7.3.1",
     "typescript": "~5.9.0",
     "vitest": "^5.0.5"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.4",
+    "mysql2": "^3.24.6"
   }
 }
