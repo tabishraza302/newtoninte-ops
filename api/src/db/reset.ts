@@ -25,13 +25,18 @@ const TABLES = [
  * a destructive dev-only helper — point `DATABASE_URL` at the dev database.
  */
 export async function resetDatabase(): Promise<void> {
-  await pool.query('SET FOREIGN_KEY_CHECKS = 0')
+  // `FOREIGN_KEY_CHECKS` is session-scoped, so the guard, the drops, and the
+  // reset must all run on ONE connection — `pool.query` may otherwise route
+  // each statement to a different pooled connection.
+  const conn = await pool.getConnection()
   try {
+    await conn.query('SET FOREIGN_KEY_CHECKS = 0')
     for (const table of TABLES) {
-      await pool.query(`DROP TABLE IF EXISTS \`${table}\``)
+      await conn.query(`DROP TABLE IF EXISTS \`${table}\``)
     }
+    await conn.query('SET FOREIGN_KEY_CHECKS = 1')
   } finally {
-    await pool.query('SET FOREIGN_KEY_CHECKS = 1')
+    conn.release()
   }
   await runMigrations()
 }
