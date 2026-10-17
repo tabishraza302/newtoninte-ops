@@ -177,95 +177,147 @@ Pure ASCII so it renders anywhere: cat docs/architecture.ascii.txt
 6. DATA MODEL
 -------------
 
-   +------------------------+
-   |         users          |
-   |------------------------|
-   | id             PK      |
-   | email          UK      |
-   | password_hash  (argon2)|
-   | is_admin   (seed-only) |
-   | status                 |
-   +-----------+------------+
-               |
-   +-----------+--------+---------------+-------------------+
-   | 1:N                | 1:N           | 1:N               | 1:N
-   v                    v               v                   v
-+---------------+  +----------------+  +---------------+  +--------------------+
-| memberships   |  | refresh_tokens |  | invitations   |  | idempotency_keys   |
-|---------------|  |----------------|  |---------------|  |--------------------|
-| id        PK  |  | id          PK |  | id         PK |  | id             PK  |
-| user_id   FK  |  | user_id     FK |  | team_id    FK |  | user_id        FK  |
-| team_id   FK  |  | token_hash  UK |  | email (bound)|  | key  (UNIQUE with  |
-| role          |  | family_id      |  |  (required)  |  |       user_id)     |
-+-------+-------+  | revoked_at     |  | role          |  | response_body      |
-        |          | replaced_by    |  | max_uses/uses |  | expires_at         |
-        | N:1      +----------------+  | expires_at    |  +--------------------+
-        v                              +-------+-------+
-+---------------+                              | N:1
-|    teams      |<-----------------------------+
-|---------------|
-| id        PK  |
-| slug      UK  |
-+-------+-------+
-        | 1:N
-        v
-+-----------------------------------+
-|            work_items             |
-|-----------------------------------|
-| id            PK                  |
-| team_id       FK                  |
-| title, description                |
-| type, priority, status            |
-| assignee_id   FK -> users  (0..1) |
-| created_by    FK -> users         |
-| due_at                            |
-| version   (optimistic lock)       |
-+--------+-----------------+--------+
-         | 1:N             | 1:N
-         v                 v
-+------------------+  +-----------------+
-| activity_events  |  |    comments     |
-|------------------|  |-----------------|
-| id           PK  |  | id           PK |
-| work_item_id FK  |  | work_item_id FK |
-| actor_id     FK  |  | author_id    FK |
-| type             |  | body            |
-| from/to value    |  | created_at      |
-| metadata (json)  |  +-----------------+
-+------------------+
+   Relationships (every foreign key is shown here):
 
-   +-------------------------------------+
-   |            outbox_jobs              |    NO foreign keys by design.
-   |-------------------------------------|    References entities via JSON payload,
-   | id            PK                    |    so a job can be enqueued in the SAME
-   | type, payload, status               |    transaction as any change.
-   | attempts, max_attempts              |
-   | available_at, locked_at, locked_by  |
-   | dedupe_key, last_error              |
-   +-------------------------------------+
+     users ----< memberships >---- teams
+     users ----< membership_events >---- teams        (actor_id, subject_user_id)
+     users ----< invitations ;  teams ----< invitations      (created_by)
+     users ----< refresh_tokens
+     users ----< password_reset_tokens
+     users ----< idempotency_keys
+     teams ----< work_items ;   users ----< work_items       (created_by, assignee_id)
+     work_items ----< activity_events ;  users ----< activity_events   (actor_id, null = system)
+     work_items ----< comments ;         users ----< comments          (author_id)
+     outbox_jobs                                            (standalone: no FK by design)
 
-   Standalone token table:
-     password_reset_tokens      (id, user_id, token_hash UK, expires_at, consumed_at)
+   Every table has created_at; mutable tables also have updated_at. Append-only tables
+   (activity_events, membership_events, comments) have neither updated_at nor any
+   update/delete path.
 
-   Team-level audit (append-only, same txn as the change):
-     membership_events  (id, team_id, actor_id, subject_user_id,
-                         action, from_role, to_role, created_at)
+   TABLES
+   ------
 
-   idempotency_keys fields: id, user_id, key, endpoint, request_hash,
-     response_status, response_body, resource_id, created_at, expires_at (TTL 24h)
+   +--------------------------------------------------------------------+
+   | users                                                              |
+   +--------------------------------------------------------------------+
+   | id PK, email UK (lowercased), password_hash (argon2id)             |
+   | display_name, is_admin (seed-only), status (active|disabled)       |
+   | created_at, updated_at                                             |
+   +--------------------------------------------------------------------+
 
-   KEY CONSTRAINTS (invisible above):
-     memberships        UNIQUE(user_id, team_id)   INDEX(team_id, role)
-     refresh_tokens     INDEX(user_id)   INDEX(family_id)
-     invitations        INDEX(team_id)   INDEX(code_hash)
-     idempotency_keys   UNIQUE(user_id, key)
-     outbox_jobs        UNIQUE(dedupe_key)   INDEX(status, available_at, id)
-     work_items         INDEX(team_id, status, priority)
-                        INDEX(team_id, created_at, id)
-                        INDEX(assignee_id, status)
-                        INDEX(team_id, assignee_id)
-     activity_events    INDEX(work_item_id, id)   append-only, never updated
-     membership_events  INDEX(team_id, id)        append-only
+   +--------------------------------------------------------------------+
+   | teams                                                              |
+   +--------------------------------------------------------------------+
+   | id PK, name, slug UK, created_at, updated_at                       |
+   +--------------------------------------------------------------------+
+
+   +--------------------------------------------------------------------+
+   | memberships                                                        |
+   +--------------------------------------------------------------------+
+   | id PK, user_id FK, team_id FK, role (viewer|member|lead)           |
+   | created_at, updated_at                                             |
+   +--------------------------------------------------------------------+
+
+   +--------------------------------------------------------------------+
+   | membership_events                                                  |
+   +--------------------------------------------------------------------+
+   | id PK, team_id FK, actor_id FK, subject_user_id FK                 |
+   | action one of: joined, role_changed, removed                       |
+   | from_role, to_role, created_at                                     |
+   +--------------------------------------------------------------------+
+
+   +--------------------------------------------------------------------+
+   | invitations                                                        |
+   +--------------------------------------------------------------------+
+   | id PK, team_id FK, role (granted on redeem)                        |
+   | email NOT NULL (invite is emailed here)                            |
+   | code_hash (sha256), max_uses (default 1), uses (default 0)         |
+   | expires_at NOT NULL (TTL 7d), created_by FK, revoked_at            |
+   | created_at                                                         |
+   +--------------------------------------------------------------------+
+
+   +--------------------------------------------------------------------+
+   | refresh_tokens                                                     |
+   +--------------------------------------------------------------------+
+   | id PK, user_id FK, token_hash UK, family_id (session family)       |
+   | expires_at, revoked_at, replaced_by (rotation successor)           |
+   | created_at, last_used_at, user_agent, ip                           |
+   +--------------------------------------------------------------------+
+
+   +--------------------------------------------------------------------+
+   | password_reset_tokens                                              |
+   +--------------------------------------------------------------------+
+   | id PK, user_id FK, token_hash UK, expires_at, consumed_at          |
+   | created_at                                                         |
+   +--------------------------------------------------------------------+
+
+   +--------------------------------------------------------------------+
+   | work_items                                                         |
+   +--------------------------------------------------------------------+
+   | id PK, team_id FK, title (200), description                        |
+   | type one of: incident, customer_issue, payment, compliance, task   |
+   | priority one of: low, medium, high, urgent                         |
+   | status one of: open, in_progress, awaiting_approval, resolved,     |
+   |                closed, cancelled                                   |
+   | assignee_id FK (nullable), created_by FK, due_at (nullable)        |
+   | version (optimistic lock, starts at 1)                             |
+   | created_at, updated_at                                             |
+   +--------------------------------------------------------------------+
+
+   +--------------------------------------------------------------------+
+   | activity_events                                                    |
+   +--------------------------------------------------------------------+
+   | id PK, work_item_id FK, actor_id FK (null = system)                |
+   | type one of: created, status_changed, assignee_changed,            |
+   |              priority_changed, type_changed, comment_added,        |
+   |              due_changed, title_changed, description_changed       |
+   | from_value, to_value, metadata (json), created_at                  |
+   +--------------------------------------------------------------------+
+
+   +--------------------------------------------------------------------+
+   | comments                                                           |
+   +--------------------------------------------------------------------+
+   | id PK, work_item_id FK, author_id FK, body, created_at             |
+   +--------------------------------------------------------------------+
+
+   +--------------------------------------------------------------------+
+   | outbox_jobs                                                        |
+   +--------------------------------------------------------------------+
+   | id PK, type (email.reset|email.invite|email.assigned)              |
+   | payload (json, nulled when done)                                   |
+   | status one of: pending, processing, done, failed                   |
+   | attempts, max_attempts (default 5), available_at (backoff)         |
+   | locked_at, locked_by (worker lease), last_error                    |
+   | dedupe_key UK, created_at, updated_at                              |
+   +--------------------------------------------------------------------+
+
+   +--------------------------------------------------------------------+
+   | idempotency_keys                                                   |
+   +--------------------------------------------------------------------+
+   | id PK, user_id FK, key (Idempotency-Key), endpoint                 |
+   | request_hash (body fingerprint), response_status                   |
+   | response_body (json, replayed), resource_id                        |
+   | created_at, expires_at (TTL 24h)                                   |
+   +--------------------------------------------------------------------+
+
+   KEYS AND CONSTRAINTS
+   --------------------
+
+     users                 UNIQUE(email)
+     teams                 UNIQUE(slug)
+     memberships           UNIQUE(user_id, team_id)   INDEX(team_id, role)
+     membership_events     INDEX(team_id, id)
+     invitations           INDEX(team_id)   INDEX(code_hash)
+     refresh_tokens        UNIQUE(token_hash)   INDEX(user_id)   INDEX(family_id)
+     password_reset_tokens UNIQUE(token_hash)
+     work_items            INDEX(team_id, status, priority)
+                           INDEX(team_id, created_at, id)
+                           INDEX(assignee_id, status)
+                           INDEX(team_id, assignee_id)
+     activity_events       INDEX(work_item_id, id)
+     comments              INDEX(work_item_id, id)
+     idempotency_keys      UNIQUE(user_id, key)
+     outbox_jobs           UNIQUE(dedupe_key)   INDEX(status, available_at, id)
 
 7. WORK ITEM LIFECYCLE
 ----------------------

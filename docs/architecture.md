@@ -198,7 +198,8 @@ erDiagram
   users ||--o{ memberships : "belongs to"
   teams ||--o{ memberships : "has members"
   teams ||--o{ membership_events : "audits"
-  users ||--o{ membership_events : "actor"
+  users ||--o{ membership_events : "actor (actor_id)"
+  users ||--o{ membership_events : "subject (subject_user_id)"
   users ||--o{ invitations : "created_by"
   teams ||--o{ invitations : "issues"
   users ||--o{ refresh_tokens : "owns"
@@ -211,17 +212,23 @@ erDiagram
     varchar display_name
     bool is_admin "seed-only, narrow (§7.1)"
     varchar status "active | disabled"
+    datetime created_at
+    datetime updated_at
   }
   teams {
     bigint id PK
     varchar name
     varchar slug UK
+    datetime created_at
+    datetime updated_at
   }
   memberships {
     bigint id PK
     bigint user_id FK
     bigint team_id FK
     varchar role "viewer | member | lead"
+    datetime created_at
+    datetime updated_at
   }
   membership_events {
     bigint id PK
@@ -236,14 +243,15 @@ erDiagram
   invitations {
     bigint id PK
     bigint team_id FK
-    varchar role "viewer | member | lead"
-    varchar email "required — invite is emailed here"
-    varchar code_hash "sha256"
-    int max_uses
-    int uses "atomic compare-and-set (§8.8)"
-    datetime expires_at
+    varchar role "granted on redeem"
+    varchar email "NOT NULL — invite is emailed here"
+    varchar code_hash "sha256 of the token"
+    int max_uses "default 1"
+    int uses "default 0; atomic compare-and-set (§8.8)"
+    datetime expires_at "NOT NULL, TTL 7d"
     bigint created_by FK
-    datetime revoked_at
+    datetime revoked_at "nullable"
+    datetime created_at
   }
   refresh_tokens {
     bigint id PK
@@ -253,6 +261,10 @@ erDiagram
     datetime expires_at
     datetime revoked_at
     bigint replaced_by "rotation successor"
+    datetime created_at
+    datetime last_used_at
+    varchar user_agent
+    varchar ip
   }
   password_reset_tokens {
     bigint id PK
@@ -260,6 +272,7 @@ erDiagram
     varchar token_hash UK
     datetime expires_at
     datetime consumed_at
+    datetime created_at
   }
 ```
 
@@ -279,7 +292,7 @@ erDiagram
   work_items {
     bigint id PK
     bigint team_id FK
-    varchar title
+    varchar title "200"
     text description
     varchar type "incident | customer_issue | payment | compliance | task"
     varchar priority "low | medium | high | urgent"
@@ -287,13 +300,15 @@ erDiagram
     bigint assignee_id FK "nullable"
     bigint created_by FK
     datetime due_at "nullable"
-    int version "optimistic lock"
+    int version "optimistic lock, starts at 1"
+    datetime created_at
+    datetime updated_at
   }
   activity_events {
     bigint id PK
     bigint work_item_id FK
     bigint actor_id FK "null = system"
-    varchar type
+    varchar type "created | status_changed | assignee_changed | priority_changed | type_changed | comment_added | due_changed | title_changed | description_changed"
     varchar from_value
     varchar to_value
     json metadata
@@ -315,20 +330,23 @@ erDiagram
     int response_status
     json response_body "replayed on repeat"
     bigint resource_id
+    datetime created_at
     datetime expires_at "TTL 24h"
   }
   outbox_jobs {
     bigint id PK
     varchar type "email.reset | email.invite | email.assigned"
-    json payload
+    json payload "nulled when done"
     varchar status "pending | processing | done | failed"
     int attempts
-    int max_attempts
+    int max_attempts "default 5"
     datetime available_at "backoff schedule"
     datetime locked_at
     varchar locked_by "worker lease"
     text last_error
-    varchar dedupe_key
+    varchar dedupe_key UK "repeat enqueue = no-op"
+    datetime created_at
+    datetime updated_at
   }
 ```
 
@@ -338,16 +356,24 @@ coupling to one table's lifecycle.
 
 ### 6.3 Keys and constraints not visible above
 
-| Table | Constraint |
+| Table | Keys / constraints |
 |---|---|
+| `users` | `UNIQUE(email)` |
+| `teams` | `UNIQUE(slug)` |
 | `memberships` | `UNIQUE(user_id, team_id)`, `INDEX(team_id, role)` |
-| `refresh_tokens` | `INDEX(user_id)`, `INDEX(family_id)` |
+| `membership_events` | `INDEX(team_id, id)` — append-only |
 | `invitations` | `INDEX(team_id)`, `INDEX(code_hash)` |
-| `idempotency_keys` | `UNIQUE(user_id, key)` |
-| `outbox_jobs` | `UNIQUE(dedupe_key)`, `INDEX(status, available_at, id)` |
+| `refresh_tokens` | `UNIQUE(token_hash)`, `INDEX(user_id)`, `INDEX(family_id)` |
+| `password_reset_tokens` | `UNIQUE(token_hash)` |
 | `work_items` | `INDEX(team_id, status, priority)`, `INDEX(team_id, created_at, id)`, `INDEX(assignee_id, status)`, `INDEX(team_id, assignee_id)` |
 | `activity_events` | `INDEX(work_item_id, id)` — append-only, never updated |
-| `membership_events` | `INDEX(team_id, id)` — append-only |
+| `comments` | `INDEX(work_item_id, id)` |
+| `idempotency_keys` | `UNIQUE(user_id, key)` |
+| `outbox_jobs` | `UNIQUE(dedupe_key)`, `INDEX(status, available_at, id)` |
+
+Every table has `created_at`; mutable tables also have `updated_at`. Append-only tables
+(`activity_events`, `membership_events`, `comments`) have neither `updated_at` nor any
+update/delete path.
 
 ---
 
