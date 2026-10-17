@@ -1,8 +1,8 @@
 import { createApp } from './app'
+import { config } from './config'
 
 const app = createApp()
-const port = process.env.PORT ?? 3000
 
-app.listen(port, () => {
-  console.log(`api listening on port ${port}`)
+app.listen(config.port, () => {
+  console.log(`api listening on port ${config.port}`)
 })
