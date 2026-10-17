@@ -80,13 +80,13 @@ sequenceDiagram
   end
 
   API->>DB: BEGIN
-  API->>DB: UPDATE work_items SET assignee_id=A, version=version+1<br/>WHERE id=42 AND assignee_id IS NULL
+  API->>DB: UPDATE work_items SET assignee_id=A, status='in_progress', version=version+1<br/>WHERE id=42 AND status='open' AND assignee_id IS NULL
   DB-->>API: 1 row affected
   API->>DB: INSERT activity_event(assignee_changed)
   API->>DB: COMMIT
-  API-->>A: 200 { assignee: A, version: 8 }
+  API-->>A: 200 { assignee: A, status: in_progress, version: 8 }
 
-  API->>DB: UPDATE … WHERE id=42 AND assignee_id IS NULL
+  API->>DB: UPDATE … WHERE id=42 AND status='open' AND assignee_id IS NULL
   DB-->>API: 0 rows affected
   API-->>B: 409 ALREADY_CLAIMED
 ```
@@ -171,7 +171,7 @@ sequenceDiagram
     API-->>C: 200 new access token + Set-Cookie RT2
   else RT1 is revoked — could be theft
     alt replaced inside grace window (benign concurrent refresh)
-      API-->>C: 200 — return the existing successor
+      API-->>C: 200 — mint a new successor in the family (revoke the prior one)
     else
       API->>DB: revoke the ENTIRE family
       API-->>C: 401 UNAUTHENTICATED
@@ -187,9 +187,9 @@ the design).
 
 ## 6. Data model
 
-Split into two diagrams — mixing identity, work, and infrastructure into one made the
-first version unreadable and got `work_items → users` wrong (it has **two** foreign keys
-to `users`, so it needs two labelled lines, not one).
+Split into two diagrams for readability. `work_items` has **two** foreign keys to
+`users` (`created_by` and `assignee_id`), so it is drawn with two labelled relationships
+rather than one.
 
 ### 6.1 Identity & access
 
@@ -280,7 +280,7 @@ erDiagram
   users ||--o{ work_items : "creates (created_by)"
   users ||--o{ work_items : "assigned (assignee_id, 0..1 at a time)"
   work_items ||--o{ activity_events : "append-only history"
-  users ||--o{ activity_events : "actor (0 = system)"
+  users ||--o{ activity_events : "actor (null = system)"
   work_items ||--o{ comments : "has"
   users ||--o{ comments : "writes"
   users ||--o{ idempotency_keys : "scopes"
@@ -321,8 +321,11 @@ erDiagram
     bigint user_id FK
     varchar key "Idempotency-Key header"
     varchar endpoint
+    varchar request_hash "body fingerprint → 422 on mismatch"
+    int response_status
     json response_body "replayed on repeat"
-    datetime expires_at
+    bigint resource_id
+    datetime expires_at "TTL 24h"
   }
   outbox_jobs {
     bigint id PK
@@ -347,10 +350,12 @@ coupling to one table's lifecycle.
 
 | Table | Constraint |
 |---|---|
-| `memberships` | `UNIQUE(user_id, team_id)` |
+| `memberships` | `UNIQUE(user_id, team_id)`, `INDEX(team_id, role)` |
+| `refresh_tokens` | `INDEX(user_id)`, `INDEX(family_id)` |
+| `invitations` | `INDEX(team_id)`, `INDEX(code_hash)` |
 | `idempotency_keys` | `UNIQUE(user_id, key)` |
-| `outbox_jobs` | `INDEX(status, available_at, id)` |
-| `work_items` | `INDEX(team_id, status, priority)`, `INDEX(team_id, created_at, id)`, `INDEX(assignee_id, status)` |
+| `outbox_jobs` | `UNIQUE(dedupe_key)`, `INDEX(status, available_at, id)` |
+| `work_items` | `INDEX(team_id, status, priority)`, `INDEX(team_id, created_at, id)`, `INDEX(assignee_id, status)`, `INDEX(team_id, assignee_id)` |
 | `activity_events` | `INDEX(work_item_id, id)` — append-only, never updated |
 
 ---
@@ -360,19 +365,22 @@ coupling to one table's lifecycle.
 ```mermaid
 stateDiagram-v2
   [*] --> open
-  open --> in_progress : claim / start (member)
-  open --> cancelled : cancel (lead)
-  in_progress --> awaiting_approval : submit (member)
+  open --> in_progress : claim / start (member; also sets assignee)
+  open --> cancelled : cancel (creator or lead)
+  in_progress --> awaiting_approval : submit (assignee or lead)
+  in_progress --> cancelled : cancel (creator or lead)
   awaiting_approval --> resolved : approve (LEAD ONLY)
   awaiting_approval --> in_progress : send back (lead)
+  awaiting_approval --> cancelled : cancel (creator or lead)
   resolved --> closed : close (lead)
   resolved --> in_progress : reopen (lead)
-  in_progress --> cancelled : cancel (lead)
   closed --> [*]
   cancelled --> [*]
 ```
 
 Every arrow writes an `activity_event` in the same transaction as the status change.
+Cancellation is allowed only from `open` / `in_progress` / `awaiting_approval`, never from
+`resolved`. An item is never `in_progress` without an assignee.
 
 ---
 

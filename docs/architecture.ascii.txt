@@ -82,8 +82,10 @@ Pure ASCII so it renders anywhere: cat docs/architecture.ascii.txt
                 \                                    +---------------------------+
                  +-->  POST /items/42/claim  -------> |  UPDATE work_items        |
                 /                                    |    SET assignee_id = A,   |
-   User B -----/                                     |        version = version+1|
+   User B -----/                                     |       status='in_progress'|
+                                                     |        version = version+1|
                                                      |  WHERE id = 42            |
+                                                     |    AND status='open'      |
                                                      |    AND assignee_id IS NULL|
                                                      +-------------+-------------+
                                                                    |
@@ -165,8 +167,11 @@ Pure ASCII so it renders anywhere: cat docs/architecture.ascii.txt
       |          |                  yes            no       |
       |          |                   |              |       |
       |          v                   v              v       |
-      |   200 + Set-Cookie RT2   200 (benign)   revoke ENTIRE family
+      |   200 + Set-Cookie RT2   200 (new RT)   revoke ENTIRE family
       |                                         401 UNAUTHENTICATED (theft)
+
+   Only hashes are stored, so the benign-race path MINTS a new successor in the
+   family (revoking the prior one); a successor is never read back from the DB.
 
 6. DATA MODEL
 -------------
@@ -225,7 +230,7 @@ Pure ASCII so it renders anywhere: cat docs/architecture.ascii.txt
 | work_item_id FK  |  | work_item_id FK |
 | actor_id     FK  |  | author_id    FK |
 | type             |  | body            |
-| from/to value    |  | deleted_at      |
+| from/to value    |  | created_at      |
 | metadata (json)  |  +-----------------+
 +------------------+
 
@@ -247,47 +252,40 @@ Pure ASCII so it renders anywhere: cat docs/architecture.ascii.txt
      membership_events  (id, team_id, actor_id, subject_user_id,
                          action, from_role, to_role, created_at)
 
+   idempotency_keys fields: id, user_id, key, endpoint, request_hash,
+     response_status, response_body, resource_id, created_at, expires_at (TTL 24h)
+
    KEY CONSTRAINTS (invisible above):
-     memberships        UNIQUE(user_id, team_id)
+     memberships        UNIQUE(user_id, team_id)   INDEX(team_id, role)
+     refresh_tokens     INDEX(user_id)   INDEX(family_id)
+     invitations        INDEX(team_id)   INDEX(code_hash)
      idempotency_keys   UNIQUE(user_id, key)
-     outbox_jobs        INDEX(status, available_at, id)
+     outbox_jobs        UNIQUE(dedupe_key)   INDEX(status, available_at, id)
      work_items         INDEX(team_id, status, priority)
                         INDEX(team_id, created_at, id)
                         INDEX(assignee_id, status)
+                        INDEX(team_id, assignee_id)
      activity_events    INDEX(work_item_id, id)   append-only, never updated
 
 7. WORK ITEM LIFECYCLE
 ----------------------
 
-                                claim/start (member)
-               +-----------------------------------------------+
-               |                                               v
-          +---------+                                    +-------------+
- [start]-> |  open   |                                    | in_progress |<------+
-          +----+----+                                    +------+------+       |
-               |                                       submit    |              |
-         cancel|                                     (member)    |              | reopen
-         (lead)|                                                 v              | (lead)
-               |                                       +--------------------+  |
-               |                                       | awaiting_approval  |  |
-               |                                       +----+----------+----+  |
-               |                                approve     |          | send back
-               |                             (LEAD ONLY)    |          | (lead)
-               |                                            v          +-------+
-               |                                     +-------------+   (back to
-               |                                     |  resolved   |    in_progress)
-               |                                     +------+------+
-               |                                      close |   | reopen (lead)
-               |                                       (lead)|   +--> in_progress
-               |                                            v
-               |                                     +-------------+
-               |                                     |   closed    | [end]
-               |                                     +-------------+
-               v
-          +-------------+
-          |  cancelled  | [end]
-          +-------------+
+   open --claim/start--> in_progress --submit--> awaiting_approval
+    |    (member; sets         ^                        |
+    |     assignee)            |                        | approve (LEAD ONLY)
+    |                          | send back (lead)       v
+    |                          +------------------  resolved
+    |                                                  |  |
+    |                                       close(lead)|  | reopen(lead)
+    |                                                  v  +--> in_progress
+    |                                              closed  [end]
+    |
+    +-- cancel (creator or lead) --> cancelled  [end]
 
+   cancel is also allowed from in_progress and awaiting_approval
+   (by the creator or a lead). It is NOT allowed from resolved.
+
+   An item is NEVER in_progress without an assignee.
    Every arrow writes an activity_event in the SAME transaction as the status change.
 
 8. SYNC vs ASYNC BOUNDARY
