@@ -334,7 +334,21 @@ export function OutboxJobsTable(): React.ReactElement {
                     <td style={{ padding: '0.625rem 0.75rem' }}>
                       <button
                         type="button"
-                        onClick={() => retryJob.mutate({ id: job.id })}
+                        onClick={() =>
+                          retryJob.mutate(
+                            { id: job.id },
+                            {
+                              onSuccess: () => {
+                                // The server re-queued this job, and a cursor page is never a
+                                // complete list: reset to page 1 so the effect above *replaces*
+                                // the list from a fresh first page instead of merging into a
+                                // stale one that still holds the retried row as `failed`.
+                                setCursor(undefined)
+                                setJobs([])
+                              },
+                            },
+                          )
+                        }
                         disabled={job.status !== 'failed' || retryJob.isPending}
                         style={{
                           padding: '0.35rem 0.85rem',

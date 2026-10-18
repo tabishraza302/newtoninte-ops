@@ -308,6 +308,75 @@ describe('OutboxJobs Page (Task 5.4)', () => {
     expect(screen.queryByRole('button', { name: /Load more/i })).not.toBeInTheDocument()
   })
 
+  it('reconciles the retried row from a fresh first page when a cursor page is loaded', async () => {
+    const secondJob: JobView = { ...pendingJob, id: 9, type: 'email.reset', dedupeKey: 'invite:43' }
+    let firstPageJobs: JobView[] = [failedJob]
+    let retried = false
+
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : String(input)
+      if (url.startsWith('/admin/jobs/summary')) {
+        return Promise.resolve(jsonResponse(summary))
+      }
+      if (/^\/admin\/jobs\/7\/retry/.test(url)) {
+        retried = true
+        // The server re-queued row 7, so a fresh page 1 no longer reports it as failed.
+        firstPageJobs = [{ ...failedJob, status: 'pending', lastError: null }]
+        return Promise.resolve(new Response(null, { status: 204 }))
+      }
+      if (url.startsWith('/admin/jobs?') && url.includes('cursor=c1')) {
+        return Promise.resolve(jsonResponse({ jobs: [secondJob], nextCursor: null }))
+      }
+      if (url === '/admin/jobs' || url.startsWith('/admin/jobs?')) {
+        return Promise.resolve(jsonResponse({ jobs: firstPageJobs, nextCursor: 'c1' }))
+      }
+      return Promise.resolve(new Response(JSON.stringify({ error: 'not found' }), { status: 404 }))
+    })
+
+    await renderJobs()
+
+    await waitFor(() => {
+      expect(screen.getByText('email.assigned')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /Load more/i }))
+
+    await waitFor(() => {
+      expect(adminListCalls()).toContain('/admin/jobs?cursor=c1')
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('email.reset')).toBeInTheDocument()
+    })
+
+    // A cursor page is loaded, so the table is the merge of page 1 and page 2 and
+    // row 7 still renders as failed with an enabled Retry.
+    const failedRow = screen.getByRole('row', { name: /email\.assigned/i })
+    expect(failedRow).toHaveTextContent('failed')
+    expect(within(failedRow).getByRole('button', { name: /Retry/i })).toBeEnabled()
+
+    const firstPageCallsBefore = adminListCalls().filter((url) => url === '/admin/jobs').length
+
+    fireEvent.click(within(failedRow).getByRole('button', { name: /Retry/i }))
+
+    await waitFor(() => {
+      expect(retried).toBe(true)
+    })
+
+    // The retry succeeded, so the operator must not be left looking at the stale
+    // `failed` row: the list has to reconcile from a *fresh page-1 fetch* (never a
+    // row invented client-side, since a 204 carries no row and the worker may claim
+    // it immediately), which shows row 7 as pending with Retry disabled.
+    await waitFor(() => {
+      const row = screen.getByRole('row', { name: /email\.assigned/i })
+      expect(row).toHaveTextContent('pending')
+      expect(within(row).getByRole('button', { name: /Retry/i })).toBeDisabled()
+      expect(
+        adminListCalls().filter((url) => url === '/admin/jobs').length,
+      ).toBeGreaterThan(firstPageCallsBefore)
+    })
+  })
+
   it('serves /admin/jobs through AppRoutes to an admin user', async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : String(input)
