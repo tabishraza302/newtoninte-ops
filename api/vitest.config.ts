@@ -16,6 +16,9 @@ export default defineConfig({
         process.env.TEST_DATABASE_URL ??
         'mysql://newtonite:newtonite@127.0.0.1:3306/newtonite_test',
       JWT_SECRET: 'test-secret',
+      // Non-default on purpose: tokens.test.ts proves the TTL is read from
+      // config rather than hard-coded to the 900s default.
+      ACCESS_TOKEN_TTL_SEC: '1234',
     },
   },
 })

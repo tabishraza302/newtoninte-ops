@@ -16,18 +16,29 @@ import { ApiError } from '../http/errors'
 /** The signing key, derived once from the configured secret. */
 const key = new TextEncoder().encode(config.jwtSecret)
 
+/** The canonical form of a subject we are willing to sign: a positive integer. */
+function isPositiveSafeInteger(value: number): boolean {
+  return Number.isSafeInteger(value) && value > 0
+}
+
 /**
  * Signs a short-lived access token for `userId`.
  *
- * The lifetime is `config.accessTtlSec` (default 900s); `iat`/`exp` are set by
- * jose from the current clock.
+ * The lifetime is `config.accessTtlSec` (default 900s). `iat` is read once and
+ * `exp` is derived from it, so the two never straddle a second boundary. A
+ * `userId` our own verifier would reject is a programming error, not caller
+ * input, hence `INTERNAL_ERROR` rather than `UNAUTHENTICATED`.
  */
 export async function signAccessToken(userId: number): Promise<string> {
+  if (!isPositiveSafeInteger(userId)) {
+    throw new ApiError('INTERNAL_ERROR')
+  }
+  const iat = Math.floor(Date.now() / 1000)
   return new SignJWT({})
     .setProtectedHeader({ alg: 'HS256' })
     .setSubject(String(userId))
-    .setIssuedAt()
-    .setExpirationTime(`${config.accessTtlSec}s`)
+    .setIssuedAt(iat)
+    .setExpirationTime(iat + config.accessTtlSec)
     .sign(key)
 }
 
@@ -35,20 +46,24 @@ export async function signAccessToken(userId: number): Promise<string> {
  * Verifies `token` and returns its subject as a positive integer.
  *
  * Throws `ApiError('UNAUTHENTICATED')` for anything the caller could not
- * legitimately present: a bad signature, an expired or malformed token, or a
- * `sub` that is missing, non-numeric, zero or negative.
+ * legitimately present: a bad signature, an unexpected algorithm, an expired,
+ * malformed or `exp`-less token, or a `sub` that is missing, non-canonical,
+ * zero or negative.
  */
 export async function verifyAccessToken(token: string): Promise<{ sub: number }> {
   let sub: unknown
   try {
-    const { payload } = await jwtVerify(token, key)
+    const { payload } = await jwtVerify(token, key, {
+      algorithms: ['HS256'],
+      requiredClaims: ['exp'],
+    })
     sub = payload.sub
   } catch {
     throw new ApiError('UNAUTHENTICATED')
   }
 
-  const userId = typeof sub === 'string' && /^\d+$/.test(sub) ? Number(sub) : NaN
-  if (!Number.isSafeInteger(userId) || userId <= 0) {
+  const userId = typeof sub === 'string' && /^[1-9][0-9]*$/.test(sub) ? Number(sub) : NaN
+  if (!isPositiveSafeInteger(userId)) {
     throw new ApiError('UNAUTHENTICATED')
   }
   return { sub: userId }
