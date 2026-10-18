@@ -1,3 +1,4 @@
+import { ApiError } from '../http/errors'
 import { and, eq } from 'drizzle-orm'
 import { db } from '../db/client'
 import { memberships } from '../db/schema'
@@ -103,4 +104,33 @@ export async function can(
       return exhaustive
     }
   }
+}
+
+/**
+ * Returns all team IDs the actor is a member of.
+ * Never returns all teams for an admin — an admin does not see others' work items (§7.1).
+ */
+export async function scopeTeamIds(actor: Actor): Promise<number[]> {
+  const memberships = await membershipsOf(actor.id)
+  return memberships.map((m) => m.teamId)
+}
+
+/**
+ * Authorizes `actor` for `action` on `resource`.
+ * Throws `NOT_FOUND` (404) if the actor has no membership in the resource's team.
+ * Throws `FORBIDDEN` (403) if the actor is a member but lacks permission.
+ */
+export async function authorize(
+  actor: Actor,
+  action: Action,
+  resource: ItemResource | TeamResource,
+): Promise<void> {
+  const allowed = await can(actor, action, resource)
+  if (allowed) return
+
+  const role = await roleIn(actor.id, resource.teamId)
+  if (role === null) {
+    throw ApiError.of('NOT_FOUND')
+  }
+  throw ApiError.of('FORBIDDEN')
 }
