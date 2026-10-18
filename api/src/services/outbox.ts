@@ -1,8 +1,9 @@
-// The transactional outbox: state changes that must trigger a side effect
-// (an email) are recorded as a job row in the same transaction that makes the
-// change. A separate worker drains `outbox_jobs` after the commit, so the
-// side effect can never fire for a transaction that rolled back and a lost
-// side effect cannot outlive a committed change.
+// The transactional outbox (design): a state change that must trigger a side
+// effect (an email) is recorded as a job row in the same transaction that makes
+// the change. A worker — a later task — will drain outbox_jobs after the
+// commit. That is what buys the guarantee: a side effect can never fire for a
+// transaction that rolled back, and the side effect for a committed change
+// cannot be lost.
 
 import { sql } from 'drizzle-orm'
 import { outboxJobs } from '../db/schema'
@@ -15,12 +16,12 @@ import type { OutboxJobType } from '../domain/types'
  *
  * `dedupe_key` is globally unique: a repeat enqueue is a genuine no-op
  * (`ON DUPLICATE KEY UPDATE id = id`), not an error and not an overwrite, so
- * the original job — including its payload and schedule — is preserved.
+ * the original job — including its payload and its claim state — is preserved.
  *
- * `available_at` and `status` are left to the database: `CURRENT_TIMESTAMP(3)`
- * is the source of truth for "due now" (fat-fingering a JS clock here would
- * drift from the worker's time comparisons), and the `pending` default is the
- * worker's "unclaimed" state.
+ * The column values are supplied explicitly rather than left to defaults:
+ * `available_at` is computed by the database (`CURRENT_TIMESTAMP(3)`, never a
+ * JS clock, so it agrees with the worker's own time comparisons), and `status`
+ * is pinned to `pending`, the worker's "unclaimed" state.
  */
 export async function enqueue(
   tx: Tx,
