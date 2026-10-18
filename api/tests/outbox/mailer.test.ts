@@ -55,6 +55,38 @@ describe('templates', () => {
     expect(msg.html).toContain('Acme Rockets')
     expect(msg.html.length).toBeGreaterThan(0)
   })
+
+  it('HTML-escapes hostile text and links in html, but leaves the text body raw', () => {
+    const hostileTeam = `Acme <b>"Rockets"</b> & O'Brien`
+    const hostileItem = `<script>'x' & "y"</script>`
+    // The `&` is the character the earlier `toContain(link)` fixtures avoided.
+    const link = 'https://app.example.test/invite?token=a&next=b'
+
+    const invite = inviteEmail({ teamName: hostileTeam, link })
+
+    // Danger is neutralised in html: escaped forms present, raw tag absent.
+    expect(invite.html).toContain('&lt;b&gt;')
+    expect(invite.html).toContain('&quot;')
+    expect(invite.html).toContain('&#39;')
+    expect(invite.html).toContain('&amp;')
+    expect(invite.html).not.toContain('<b>')
+
+    // The link is escaped inside the href.
+    expect(invite.html).toContain('href="https://app.example.test/invite?token=a&amp;next=b"')
+
+    // text is never HTML-escaped: raw characters survive verbatim.
+    expect(invite.text).toContain('<b>')
+    expect(invite.text).toContain("O'Brien")
+    expect(invite.text).toContain(link)
+    expect(invite.text).not.toContain('&lt;')
+    expect(invite.text).not.toContain('&amp;')
+
+    // Same escaping applies to the item title in assignedEmail.
+    const assigned = assignedEmail({ itemTitle: hostileItem, teamName: hostileTeam, link })
+    expect(assigned.html).toContain('&lt;script&gt;')
+    expect(assigned.html).not.toContain('<script>')
+    expect(assigned.text).toContain('<script>')
+  })
 })
 
 describe.skipIf(!process.env.SMTP_URL)('sendMail (real SMTP via Mailpit)', () => {
