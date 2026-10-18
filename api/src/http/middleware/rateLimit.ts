@@ -10,7 +10,10 @@ export function rateLimit(opts: { key: string; windowMs: number; max: number }):
   const buckets = new Map<string, RateLimitBucket>()
 
   return (req, _res, next) => {
-    const ip = req.ip ?? req.socket.remoteAddress ?? 'unknown'
+    const forwarded = req.headers['x-forwarded-for']
+    const ip = typeof forwarded === 'string'
+      ? forwarded.split(',')[0]!.trim()
+      : (req.ip ?? req.socket.remoteAddress ?? 'unknown')
     const identifier = `${ip}:${opts.key}`
     const now = Date.now()
 
