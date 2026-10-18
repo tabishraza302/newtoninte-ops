@@ -50,7 +50,7 @@ function toInvitationView(row: typeof invitations.$inferSelect): InvitationView 
 export async function createInvitation(
   actor: Actor,
   teamId: number,
-  input: { email: string; role: Role; maxUses?: number },
+  input: { email: string; role: Role; maxUses?: number | undefined },
 ): Promise<InvitationView> {
   await authorize(actor, 'invitation:manage', { kind: 'team', teamId })
 
@@ -177,9 +177,9 @@ export async function revokeInvitation(
 
 export interface RedeemInput {
   code: string
-  email?: string
-  password?: string
-  displayName?: string
+  email?: string | undefined
+  password?: string | undefined
+  displayName?: string | undefined
 }
 
 export type UserRow = typeof users.$inferSelect
