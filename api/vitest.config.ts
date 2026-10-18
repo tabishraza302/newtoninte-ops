@@ -6,6 +6,9 @@ export default defineConfig({
     globals: false,
     setupFiles: [],
     pool: 'forks',
+    // Tests share one database; parallel files would truncate each other's rows.
+    fileParallelism: false,
+    globalSetup: ['./tests/globalSetup.ts'],
     // Required env for modules evaluated at import time (e.g. src/config.ts).
     // Extend in later tasks; keep values in sync with .env.example.
     env: {
