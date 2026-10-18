@@ -16,7 +16,7 @@ export interface AuthContextValue {
   setAuthUser(user: User | null): void
 }
 
-const AuthContext = createContext<AuthContextValue | null>(null)
+export const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AuthProvider({ children }: { children: React.ReactNode }): React.ReactElement {
   const [user, setUser] = useState<User | null>(null)
@@ -106,4 +106,8 @@ export function useAuth(): AuthContextValue {
     throw new Error('useAuth must be used within an AuthProvider')
   }
   return ctx
+}
+
+export function useOptionalAuth(): AuthContextValue | null {
+  return useContext(AuthContext)
 }

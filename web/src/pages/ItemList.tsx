@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams, Link } from 'react-router-dom'
 import { useItems } from '../api/hooks'
 import {
   STATUSES,
@@ -69,8 +69,22 @@ export function ItemList(): React.ReactElement {
 
   return (
     <div className="item-list-page" style={{ padding: '1.5rem', maxWidth: '1200px', margin: '0 auto' }}>
-      <header style={{ marginBottom: '1.5rem' }}>
-        <h1 style={{ fontSize: '1.75rem', fontWeight: 700 }}>Items</h1>
+      <header style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h1 style={{ fontSize: '1.75rem', fontWeight: 700, margin: 0 }}>Items</h1>
+        <Link
+          to="/items/new"
+          style={{
+            padding: '0.5rem 1rem',
+            backgroundColor: '#2563eb',
+            color: '#ffffff',
+            borderRadius: '6px',
+            textDecoration: 'none',
+            fontWeight: 600,
+            fontSize: '0.875rem',
+          }}
+        >
+          New Item
+        </Link>
       </header>
 
       {/* Filter Controls */}

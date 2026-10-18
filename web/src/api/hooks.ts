@@ -1,9 +1,20 @@
-import { useQuery, type UseQueryResult } from '@tanstack/react-query'
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type UseMutationResult,
+  type UseQueryResult,
+} from '@tanstack/react-query'
 import { apiFetch } from './client'
 import type {
   ActivityEvent,
+  CreateItemInput,
   ListItemsQuery,
+  MeResponse,
+  PatchItemInput,
+  Status,
   Team,
+  UserSummary,
   WorkItem,
 } from './types'
 
@@ -83,5 +94,150 @@ export function useTeams(
   return useQuery<TeamsResponse, Error>({
     queryKey: ['teams', opts?.all],
     queryFn: () => apiFetch<TeamsResponse>(`/teams${qs}`),
+  })
+}
+
+export function useMe(): UseQueryResult<MeResponse, Error> {
+  return useQuery<MeResponse, Error>({
+    queryKey: ['auth-me'],
+    queryFn: () => apiFetch<MeResponse>('/auth/me'),
+    retry: false,
+  })
+}
+
+export function useCreateItem(): UseMutationResult<
+  ItemResponse,
+  Error,
+  { data: CreateItemInput; idempotencyKey?: string }
+> {
+  const queryClient = useQueryClient()
+  return useMutation<ItemResponse, Error, { data: CreateItemInput; idempotencyKey?: string }>({
+    mutationFn: async ({ data, idempotencyKey }) => {
+      const headers: Record<string, string> = {}
+      if (idempotencyKey) {
+        headers['Idempotency-Key'] = idempotencyKey
+      }
+      return apiFetch<ItemResponse>('/items', {
+        method: 'POST',
+        headers,
+        json: data,
+      })
+    },
+    onSuccess: (res) => {
+      queryClient.setQueryData(['item', res.item.id], res)
+      void queryClient.invalidateQueries({ queryKey: ['items'] })
+    },
+  })
+}
+
+export function usePatchItem(): UseMutationResult<
+  ItemResponse,
+  Error,
+  { id: number; data: PatchItemInput }
+> {
+  const queryClient = useQueryClient()
+  return useMutation<ItemResponse, Error, { id: number; data: PatchItemInput }>({
+    mutationFn: async ({ id, data }) => {
+      return apiFetch<ItemResponse>(`/items/${id}`, {
+        method: 'PATCH',
+        json: data,
+      })
+    },
+    onSuccess: (res) => {
+      queryClient.setQueryData(['item', res.item.id], res)
+      void queryClient.invalidateQueries({ queryKey: ['items'] })
+      void queryClient.invalidateQueries({ queryKey: ['item-activity', res.item.id] })
+    },
+  })
+}
+
+export interface ClaimItemContext {
+  previousItem?: ItemResponse | undefined
+}
+
+export function useClaimItem(): UseMutationResult<
+  ItemResponse,
+  Error,
+  { id: number; actor?: UserSummary | null | undefined },
+  ClaimItemContext
+> {
+  const queryClient = useQueryClient()
+  return useMutation<ItemResponse, Error, { id: number; actor?: UserSummary | null | undefined }, ClaimItemContext>({
+    mutationFn: async ({ id }) => {
+      return apiFetch<ItemResponse>(`/items/${id}/claim`, {
+        method: 'POST',
+      })
+    },
+    onMutate: async ({ id, actor }) => {
+      await queryClient.cancelQueries({ queryKey: ['item', id] })
+      const previousItem = queryClient.getQueryData<ItemResponse>(['item', id])
+      if (previousItem) {
+        queryClient.setQueryData<ItemResponse>(['item', id], {
+          ...previousItem,
+          item: {
+            ...previousItem.item,
+            status: 'in_progress',
+            assigneeId: actor?.id ?? previousItem.item.assigneeId,
+            assignee: actor ?? previousItem.item.assignee ?? null,
+          },
+        })
+      }
+      return { previousItem }
+    },
+    onError: (_err, { id }, context) => {
+      if (context?.previousItem) {
+        queryClient.setQueryData(['item', id], context.previousItem)
+      }
+    },
+    onSettled: (_data, _err, { id }) => {
+      void queryClient.invalidateQueries({ queryKey: ['item', id] })
+      void queryClient.invalidateQueries({ queryKey: ['item-activity', id] })
+      void queryClient.invalidateQueries({ queryKey: ['items'] })
+    },
+  })
+}
+
+export interface TransitionItemContext {
+  previousItem?: ItemResponse | undefined
+}
+
+export function useTransitionItem(): UseMutationResult<
+  ItemResponse,
+  Error,
+  { id: number; to: Status; reason?: string | undefined },
+  TransitionItemContext
+> {
+  const queryClient = useQueryClient()
+  return useMutation<ItemResponse, Error, { id: number; to: Status; reason?: string | undefined }, TransitionItemContext>({
+    mutationFn: async ({ id, to, reason }) => {
+      return apiFetch<ItemResponse>(`/items/${id}/transition`, {
+        method: 'POST',
+        json: { to, reason },
+      })
+    },
+    onMutate: async ({ id, to }) => {
+      await queryClient.cancelQueries({ queryKey: ['item', id] })
+      const previousItem = queryClient.getQueryData<ItemResponse>(['item', id])
+      if (previousItem) {
+        queryClient.setQueryData<ItemResponse>(['item', id], {
+          ...previousItem,
+          item: {
+            ...previousItem.item,
+            status: to,
+          },
+        })
+      }
+      return { previousItem }
+    },
+    onError: (_err, { id }, context) => {
+      if (context?.previousItem) {
+        queryClient.setQueryData(['item', id], context.previousItem)
+      }
+    },
+    onSettled: (_data, _err, { id }) => {
+      void queryClient.invalidateQueries({ queryKey: ['item', id] })
+      void queryClient.invalidateQueries({ queryKey: ['item-activity', id] })
+      void queryClient.invalidateQueries({ queryKey: ['items'] })
+    },
   })
 }

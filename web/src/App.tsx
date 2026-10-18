@@ -7,6 +7,7 @@ import { Redeem } from './pages/Redeem'
 import { Dashboard } from './pages/Dashboard'
 import { ItemList } from './pages/ItemList'
 import { ItemDetail } from './pages/ItemDetail'
+import { ItemCreate } from './pages/ItemCreate'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -49,6 +50,7 @@ export function AppRoutes(): React.ReactElement {
       <Route path="/redeem" element={<Redeem />} />
       <Route path="/dashboard" element={<Dashboard />} />
       <Route path="/items" element={<ItemList />} />
+      <Route path="/items/new" element={<ItemCreate />} />
       <Route path="/items/:id" element={<ItemDetail />} />
       <Route path="/" element={<DashboardOrHome />} />
       <Route path="*" element={<Navigate to="/" replace />} />

@@ -99,3 +99,32 @@ export interface ListItemsQuery {
   cursor?: string
   limit?: number
 }
+
+export interface CreateItemInput {
+  teamId: number
+  title: string
+  description?: string | null
+  type: ItemType
+  priority?: Priority
+  dueAt?: string | null
+  assigneeId?: number | null
+}
+
+export interface PatchItemInput {
+  version: number
+  title?: string
+  description?: string | null
+  type?: ItemType
+  priority?: Priority
+  dueAt?: string | null
+}
+
+export interface TransitionItemInput {
+  to: Status
+  reason?: string
+}
+
+export interface MeResponse {
+  user: UserSummary
+  memberships: Array<{ teamId: number; role: Role }>
+}
