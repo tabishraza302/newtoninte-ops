@@ -210,7 +210,7 @@ erDiagram
   users {
     bigint id PK
     varchar email UK "lowercased"
-    varchar password_hash "argon2id"
+    varchar password_hash "bcrypt"
     varchar display_name
     bool is_admin "seed-only, narrow (§7.1)"
     varchar status "active | disabled"

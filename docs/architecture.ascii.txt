@@ -200,7 +200,7 @@ Pure ASCII so it renders anywhere: cat docs/architecture.ascii.txt
    +--------------------------------------------------------------------+
    | users                                                              |
    +--------------------------------------------------------------------+
-   | id PK, email UK (lowercased), password_hash (argon2id)             |
+   | id PK, email UK (lowercased), password_hash (bcrypt)               |
    | display_name, is_admin (seed-only), status (active|disabled)       |
    | created_at, updated_at                                             |
    +--------------------------------------------------------------------+
