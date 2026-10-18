@@ -6,6 +6,7 @@ import { healthRouter } from './http/routes/health'
 import { teamsRouter } from './http/routes/teams'
 import { invitationsRouter } from './http/routes/invitations'
 import { authRouter } from './http/routes/auth'
+import { itemsRouter } from './http/routes/items'
 
 export function createApp(): Express {
   const app = express()
@@ -15,6 +16,7 @@ export function createApp(): Express {
   app.use(teamsRouter)
   app.use(invitationsRouter)
   app.use(authRouter)
+  app.use(itemsRouter)
   app.use(notFound())
   app.use(errorHandler())
   return app
