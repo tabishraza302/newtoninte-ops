@@ -11,6 +11,7 @@ const RESET_TTL_SEC_DEFAULT = 3600
 const IDEMPOTENCY_TTL_SEC_DEFAULT = 86400
 const WORKER_INTERVAL_MS_DEFAULT = 3000
 const WORKER_BATCH_SIZE_DEFAULT = 10
+const WORKER_LEASE_SEC_DEFAULT = 300
 const PORT_DEFAULT = 3000
 
 export interface Config {
@@ -28,6 +29,7 @@ export interface Config {
   resetTtlSec: number
   workerIntervalMs: number
   workerBatchSize: number
+  workerLeaseSec: number
   idempotencyTtlSec: number
   appBaseUrl: string
 }
@@ -100,6 +102,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   const resetTtlSec = numberSetting(env, 'RESET_TTL_SEC', RESET_TTL_SEC_DEFAULT, errors)
   const workerIntervalMs = numberSetting(env, 'WORKER_INTERVAL_MS', WORKER_INTERVAL_MS_DEFAULT, errors)
   const workerBatchSize = numberSetting(env, 'WORKER_BATCH_SIZE', WORKER_BATCH_SIZE_DEFAULT, errors)
+  const workerLeaseSec = numberSetting(env, 'WORKER_LEASE_SEC', WORKER_LEASE_SEC_DEFAULT, errors)
   const idempotencyTtlSec = numberSetting(env, 'IDEMPOTENCY_TTL_SEC', IDEMPOTENCY_TTL_SEC_DEFAULT, errors)
 
   if (errors.length > 0) {
@@ -121,6 +124,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     resetTtlSec,
     workerIntervalMs,
     workerBatchSize,
+    workerLeaseSec,
     idempotencyTtlSec,
     appBaseUrl,
   }

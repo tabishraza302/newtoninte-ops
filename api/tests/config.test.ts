@@ -9,6 +9,7 @@ describe('loadConfig', () => {
     expect(c.accessTtlSec).toBe(900)
     expect(c.refreshGraceSec).toBe(10)
     expect(c.workerBatchSize).toBe(10)
+    expect(c.workerLeaseSec).toBe(300)
     expect(c.idempotencyTtlSec).toBe(86400)
     expect(c.inviteTtlDays).toBe(7)
     expect(c.mailDriver).toBe('mailpit')
@@ -21,6 +22,17 @@ describe('loadConfig', () => {
   })
   it('rejects an invalid numeric setting', () => {
     expect(() => loadConfig({ ...base, PORT: 'abc' })).toThrow()
+  })
+  it('reads the worker knobs from the environment', () => {
+    const c = loadConfig({
+      ...base,
+      WORKER_INTERVAL_MS: '1000',
+      WORKER_BATCH_SIZE: '25',
+      WORKER_LEASE_SEC: '45',
+    })
+    expect(c.workerIntervalMs).toBe(1000)
+    expect(c.workerBatchSize).toBe(25)
+    expect(c.workerLeaseSec).toBe(45)
   })
   it('rejects an invalid boolean setting', () => {
     expect(() => loadConfig({ ...base, COOKIE_SECURE: 'maybe' })).toThrow()
