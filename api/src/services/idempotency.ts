@@ -1,0 +1,111 @@
+import { and, eq, sql } from 'drizzle-orm'
+import { config } from '../config'
+import { idempotencyKeys } from '../db/schema'
+import { withTransaction, type Tx } from '../db/tx'
+import { ApiError } from '../http/errors'
+import { sha256 } from './crypto'
+
+/**
+ * Deterministically canonicalizes JSON (keys sorted recursively) and returns SHA-256 hex hash.
+ */
+export function requestHash(body: unknown): string {
+  return sha256(canonicalizeJson(body))
+}
+
+function canonicalizeJson(val: unknown): string {
+  if (val === null || typeof val !== 'object') {
+    return JSON.stringify(val) ?? 'null'
+  }
+
+  if (Array.isArray(val)) {
+    const items = val.map((item) => canonicalizeJson(item))
+    return `[${items.join(',')}]`
+  }
+
+  const obj = val as Record<string, unknown>
+  const sortedKeys = Object.keys(obj).sort()
+  const entries: string[] = []
+  for (const k of sortedKeys) {
+    const v = obj[k]
+    if (v !== undefined) {
+      entries.push(`${JSON.stringify(k)}:${canonicalizeJson(v)}`)
+    }
+  }
+  return `{${entries.join(',')}}`
+}
+
+export interface IdempotencyResult<T> {
+  status: number
+  body: T
+  replayed: boolean
+}
+
+export interface IdempotencyHandlerResult<T> {
+  status: number
+  body: T
+  resourceId?: number
+}
+
+/**
+ * Executes `fn` with idempotency guarantees within a transaction.
+ */
+export async function withIdempotency<T>(
+  actorId: number,
+  key: string,
+  endpoint: string,
+  body: unknown,
+  fn: (tx: Tx) => Promise<IdempotencyHandlerResult<T>>,
+): Promise<IdempotencyResult<T>> {
+  const currentHash = requestHash(body)
+
+  return await withTransaction(async (tx) => {
+    const [existing] = await tx
+      .select()
+      .from(idempotencyKeys)
+      .where(and(eq(idempotencyKeys.userId, actorId), eq(idempotencyKeys.key, key)))
+      .for('update')
+
+    if (existing) {
+      const now = new Date()
+      const isExpired = existing.expiresAt.getTime() <= now.getTime()
+
+      if (!isExpired) {
+        if (existing.requestHash !== currentHash) {
+          throw ApiError.of('IDEMPOTENCY_KEY_MISMATCH')
+        }
+
+        return {
+          status: existing.responseStatus,
+          body: existing.responseBody as T,
+          replayed: true,
+        }
+      }
+
+      await tx
+        .delete(idempotencyKeys)
+        .where(eq(idempotencyKeys.id, existing.id))
+    }
+
+    const res = await fn(tx)
+
+    const ttlSec = config.idempotencyTtlSec
+    const expiresAt = new Date(Date.now() + ttlSec * 1000)
+
+    await tx.insert(idempotencyKeys).values({
+      userId: actorId,
+      key,
+      endpoint,
+      requestHash: currentHash,
+      responseStatus: res.status,
+      responseBody: res.body,
+      resourceId: res.resourceId ?? null,
+      expiresAt,
+    })
+
+    return {
+      status: res.status,
+      body: res.body,
+      replayed: false,
+    }
+  })
+}
