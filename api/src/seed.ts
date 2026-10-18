@@ -3,6 +3,7 @@ import { closeDb, db } from './db/client'
 import { memberships, teams, users, workItems } from './db/schema'
 import type { NewMembership, NewWorkItem, TeamRow } from './db/schema'
 import { ITEM_TYPES, PRIORITIES, STATUSES, type Role, type Status } from './domain/types'
+import { hashPassword } from './services/crypto'
 
 // The seed runs against the app database, so its parameter is exactly the
 // type exported by src/db/client.ts.
@@ -21,7 +22,7 @@ const TARGET_ITEMS = 5000
 /** Rows per INSERT statement — large enough to be quick, small enough for max_allowed_packet. */
 const INSERT_CHUNK_SIZE = 500
 
-/** Shared demo password, hashed with bcrypt via Bun.password. */
+/** Shared demo password, hashed with our bcrypt helper (src/services/crypto.ts). */
 const DEMO_PASSWORD = 'Passw0rd!'
 
 const DEMO_TEAMS = [
@@ -136,7 +137,7 @@ function buildItemRows(startIndex: number, count: number, demoTeams: TeamRow[], 
  * second call inserts nothing and the reported item count stays put.
  */
 export async function runSeed(db: Db): Promise<SeedCounts> {
-  const passwordHash = await Bun.password.hash(DEMO_PASSWORD, { algorithm: 'bcrypt' })
+  const passwordHash = await hashPassword(DEMO_PASSWORD)
   await db.insert(teams).values(DEMO_TEAMS).onDuplicateKeyUpdate({ set: { id: sql`id` } })
   await db
     .insert(users)
