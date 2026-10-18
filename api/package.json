@@ -3,16 +3,16 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun --watch src/index.ts",
-    "start": "bun src/index.ts",
-    "worker": "bun src/worker-main.ts",
+    "dev": "bun --watch --env-file ../.env src/index.ts",
+    "start": "bun --env-file ../.env src/index.ts",
+    "worker": "bun --env-file ../.env src/worker-main.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun --bun run vitest run",
     "test:watch": "bun --bun run vitest",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "bun src/db/migrate.ts",
-    "db:reset": "bun src/db/reset.ts",
-    "seed": "bun src/seed.ts"
+    "db:migrate": "bun --env-file ../.env src/db/migrate.ts",
+    "db:reset": "bun --env-file ../.env src/db/reset.ts",
+    "seed": "bun --env-file ../.env src/seed.ts"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
