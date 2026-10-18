@@ -52,8 +52,10 @@ export async function issueFamily(
  * Rotates a refresh token per spec §8.7 / §11.3:
  * 1. Finds token by `sha256(presentedToken)` with row lock.
  * 2. If unrevoked: mints successor in same family, marks old token revoked and sets `replaced_by`.
- * 3. If revoked within `config.refreshGraceSec`: benign race -> mints successor, revokes any active token in family.
- * 4. If revoked beyond grace period: token theft -> revokes the whole family and throws UNAUTHENTICATED.
+ * 3. If revoked within `config.refreshGraceSec` AND replaced_by is set:
+ *    benign race -> mints successor, revokes any active token in family.
+ * 4. If revoked beyond grace period (or replaced_by is null):
+ *    token theft -> revokes the whole family on `tx`, commits, then throws UNAUTHENTICATED.
  */
 export async function rotate(
   presentedToken: string,
@@ -61,7 +63,12 @@ export async function rotate(
 ): Promise<RotatedSession> {
   const presentedHash = sha256(presentedToken)
 
-  return withTransaction(async (tx) => {
+  type RotateOutcome =
+    | { kind: 'ok'; session: RotatedSession }
+    | { kind: 'unauthenticated' }
+    | { kind: 'theft' }
+
+  const result = await withTransaction<RotateOutcome>(async (tx) => {
     const [tokenRow] = await tx
       .select()
       .from(refreshTokens)
@@ -69,23 +76,23 @@ export async function rotate(
       .for('update')
 
     if (!tokenRow) {
-      throw ApiError.of('UNAUTHENTICATED')
+      return { kind: 'unauthenticated' }
     }
 
     // Expiry check
     if (new Date(tokenRow.expiresAt).getTime() <= Date.now()) {
-      throw ApiError.of('UNAUTHENTICATED')
+      return { kind: 'unauthenticated' }
     }
 
     const familyId = tokenRow.familyId
 
-    // Handled revoked token
+    // Handle revoked token
     if (tokenRow.revokedAt !== null) {
       const revokedAtMs = new Date(tokenRow.revokedAt).getTime()
       const graceMs = config.refreshGraceSec * 1000
       const isWithinGrace = Date.now() - revokedAtMs <= graceMs
 
-      if (isWithinGrace) {
+      if (tokenRow.replacedBy !== null && isWithinGrace) {
         // Benign race: revoke any currently active token in family and issue successor
         await tx
           .update(refreshTokens)
@@ -109,16 +116,19 @@ export async function rotate(
           .set({ replacedBy: inserted.insertId })
           .where(eq(refreshTokens.id, tokenRow.id))
 
-        return { userId: tokenRow.userId, refreshToken: nextToken, familyId }
+        return {
+          kind: 'ok',
+          session: { userId: tokenRow.userId, refreshToken: nextToken, familyId },
+        }
       }
 
-      // Beyond grace window: theft! Nuke the entire family
+      // Beyond grace window or explicitly revoked: theft! Nuke the entire family on tx
       await tx
         .update(refreshTokens)
         .set({ revokedAt: sql`CURRENT_TIMESTAMP(3)` })
         .where(and(eq(refreshTokens.familyId, familyId), isNull(refreshTokens.revokedAt)))
 
-      throw ApiError.of('UNAUTHENTICATED')
+      return { kind: 'theft' }
     }
 
     // Active token rotation
@@ -143,8 +153,16 @@ export async function rotate(
       })
       .where(eq(refreshTokens.id, tokenRow.id))
 
-    return { userId: tokenRow.userId, refreshToken: nextToken, familyId }
+    return {
+      kind: 'ok',
+      session: { userId: tokenRow.userId, refreshToken: nextToken, familyId },
+    }
   })
+
+  if (result.kind === 'ok') {
+    return result.session
+  }
+  throw ApiError.of('UNAUTHENTICATED')
 }
 
 /**
