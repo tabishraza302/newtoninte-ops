@@ -4,6 +4,7 @@ import { useMe } from '../api/hooks'
 import { useOptionalAuth } from '../auth/AuthContext'
 import { ItemForm } from '../components/ItemForm'
 import type { Role, WorkItem } from '../api/types'
+import { commonStyles } from '../theme'
 
 export interface ItemCreateProps {
   userRole?: Role
@@ -28,23 +29,37 @@ export function ItemCreate({ userRole: propRole, teamId = 1 }: ItemCreateProps =
   }
 
   return (
-    <div className="item-create-page" style={{ padding: '1.5rem', maxWidth: '800px', margin: '0 auto' }}>
-      <nav style={{ marginBottom: '1.5rem' }}>
-        <Link to="/items" style={{ color: '#2563eb', textDecoration: 'none' }}>
+    <div className="item-create-page" style={commonStyles.narrowContainer}>
+      <nav style={{ marginBottom: '1.25rem' }}>
+        <Link
+          to="/items"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '0.4rem',
+            color: '#64748b',
+            textDecoration: 'none',
+            fontSize: '0.875rem',
+            fontWeight: 500,
+          }}
+        >
           &larr; Back to items
         </Link>
       </nav>
 
       <header style={{ marginBottom: '1.5rem' }}>
-        <h1 style={{ fontSize: '1.75rem', fontWeight: 700, margin: 0 }}>Create New Item</h1>
+        <h1 style={{ fontSize: '1.75rem', fontWeight: 800, color: '#0f172a', margin: '0 0 0.25rem', letterSpacing: '-0.02em' }}>
+          Create New Item
+        </h1>
+        <p style={{ color: '#64748b', fontSize: '0.875rem', margin: 0 }}>
+          Queue a new operations task, incident, or customer issue
+        </p>
       </header>
 
       <div
         style={{
-          padding: '1.5rem',
-          backgroundColor: '#ffffff',
-          border: '1px solid #e2e8f0',
-          borderRadius: '8px',
+          ...commonStyles.cardPadded,
+          padding: '2rem',
         }}
       >
         <ItemForm

@@ -12,6 +12,7 @@ import { useOptionalAuth } from '../auth/AuthContext'
 import { ActivityTimeline } from '../components/ActivityTimeline'
 import { ItemForm } from '../components/ItemForm'
 import type { Role, Status, UserSummary } from '../api/types'
+import { commonStyles, theme, getStatusBadgeStyle, getPriorityBadgeStyle } from '../theme'
 
 export interface ItemDetailProps {
   currentUser?: UserSummary | { id: number; displayName: string; email: string }
@@ -44,8 +45,8 @@ export function ItemDetail({
   currentUser: propUser,
   userRole: propRole,
 }: ItemDetailProps = {}): React.ReactElement {
-  const { id: idParam } = useParams<{ id: string }>()
-  const itemId = idParam ? parseInt(idParam, 10) : NaN
+  const { id } = useParams<{ id: string }>()
+  const itemId = Number(id)
   const isValidId = Number.isInteger(itemId) && itemId > 0
 
   const itemQuery = useItem(isValidId ? itemId : 0)
@@ -61,12 +62,12 @@ export function ItemDetail({
 
   if (!isValidId) {
     return (
-      <div className="item-detail-page" style={{ padding: '1.5rem', maxWidth: '900px', margin: '0 auto' }}>
-        <div role="alert" data-testid="not-found" style={{ textAlign: 'center', padding: '3rem 1rem' }}>
-          <h1 style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>Item not found</h1>
-          <p style={{ color: '#64748b' }}>The requested item does not exist.</p>
-          <Link to="/items" style={{ color: '#2563eb' }}>
-            Back to items
+      <div className="item-detail-page" style={commonStyles.narrowContainer}>
+        <div role="alert" data-testid="not-found" style={{ textAlign: 'center', padding: '4rem 1rem', backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
+          <h1 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: '0.5rem', color: '#0f172a' }}>Item not found</h1>
+          <p style={{ color: '#64748b', marginBottom: '1.5rem' }}>The requested item does not exist.</p>
+          <Link to="/items" style={commonStyles.buttonSecondary}>
+            &larr; Back to items
           </Link>
         </div>
       </div>
@@ -75,8 +76,10 @@ export function ItemDetail({
 
   if (itemQuery.isLoading) {
     return (
-      <div className="item-detail-page" style={{ padding: '1.5rem', maxWidth: '900px', margin: '0 auto' }}>
-        <div role="status">Loading item...</div>
+      <div className="item-detail-page" style={commonStyles.narrowContainer}>
+        <div role="status" style={{ padding: '3rem', textAlign: 'center', color: '#64748b', backgroundColor: '#ffffff', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+          Loading item details...
+        </div>
       </div>
     )
   }
@@ -87,14 +90,14 @@ export function ItemDetail({
 
     if (isNotFound) {
       return (
-        <div className="item-detail-page" style={{ padding: '1.5rem', maxWidth: '900px', margin: '0 auto' }}>
-          <div role="alert" data-testid="not-found" style={{ textAlign: 'center', padding: '3rem 1rem' }}>
-            <h1 style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>Item not found</h1>
-            <p style={{ color: '#64748b' }}>
+        <div className="item-detail-page" style={commonStyles.narrowContainer}>
+          <div role="alert" data-testid="not-found" style={{ textAlign: 'center', padding: '4rem 1rem', backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
+            <h1 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: '0.5rem', color: '#0f172a' }}>Item not found</h1>
+            <p style={{ color: '#64748b', marginBottom: '1.5rem' }}>
               The requested item could not be found or you do not have permission to view it.
             </p>
-            <Link to="/items" style={{ color: '#2563eb' }}>
-              Back to items
+            <Link to="/items" style={commonStyles.buttonSecondary}>
+              &larr; Back to items
             </Link>
           </div>
         </div>
@@ -102,8 +105,8 @@ export function ItemDetail({
     }
 
     return (
-      <div className="item-detail-page" style={{ padding: '1.5rem', maxWidth: '900px', margin: '0 auto' }}>
-        <div role="alert" style={{ color: '#dc2626', padding: '1rem' }}>
+      <div className="item-detail-page" style={commonStyles.narrowContainer}>
+        <div role="alert" style={{ ...commonStyles.alertError, padding: '1.25rem' }}>
           Error loading item: {error.message}
         </div>
       </div>
@@ -112,12 +115,12 @@ export function ItemDetail({
 
   if (!itemQuery.data || !itemQuery.data.item) {
     return (
-      <div className="item-detail-page" style={{ padding: '1.5rem', maxWidth: '900px', margin: '0 auto' }}>
-        <div role="alert" data-testid="not-found" style={{ textAlign: 'center', padding: '3rem 1rem' }}>
-          <h1 style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>Item not found</h1>
-          <p style={{ color: '#64748b' }}>The requested item could not be found.</p>
-          <Link to="/items" style={{ color: '#2563eb' }}>
-            Back to items
+      <div className="item-detail-page" style={commonStyles.narrowContainer}>
+        <div role="alert" data-testid="not-found" style={{ textAlign: 'center', padding: '4rem 1rem', backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
+          <h1 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: '0.5rem', color: '#0f172a' }}>Item not found</h1>
+          <p style={{ color: '#64748b', marginBottom: '1.5rem' }}>The requested item could not be found.</p>
+          <Link to="/items" style={commonStyles.buttonSecondary}>
+            &larr; Back to items
           </Link>
         </div>
       </div>
@@ -146,12 +149,6 @@ export function ItemDetail({
   const creatorName = item.creator?.displayName ?? `User #${item.createdBy}`
   const dueDate = item.dueAt ? new Date(item.dueAt).toLocaleDateString() : 'No due date'
 
-  // Action permissions according to spec §6 and policy rules:
-  // - Open & unassigned -> Claim button (member/lead)
-  // - In progress & assigned -> Submit for Approval button (assignee/lead)
-  // - Awaiting approval -> Approve and Send Back buttons (lead only)
-  // - Resolved -> Close and Reopen buttons (lead only)
-  // - Open/in_progress/awaiting -> Cancel button (creator/lead)
   const isLead = effectiveRole === 'lead'
   const isMember = effectiveRole === 'member'
   const isMemberOrLead = isLead || isMember
@@ -200,9 +197,20 @@ export function ItemDetail({
   }
 
   return (
-    <div className="item-detail-page" style={{ padding: '1.5rem', maxWidth: '900px', margin: '0 auto' }}>
-      <nav style={{ marginBottom: '1rem' }}>
-        <Link to="/items" style={{ color: '#2563eb', textDecoration: 'none' }}>
+    <div className="item-detail-page" style={commonStyles.narrowContainer}>
+      <nav style={{ marginBottom: '1.25rem' }}>
+        <Link
+          to="/items"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '0.4rem',
+            color: '#64748b',
+            textDecoration: 'none',
+            fontSize: '0.875rem',
+            fontWeight: 500,
+          }}
+        >
           &larr; Back to items
         </Link>
       </nav>
@@ -211,36 +219,38 @@ export function ItemDetail({
         <div
           role="alert"
           data-testid="action-error"
-          style={{
-            padding: '0.75rem 1rem',
-            backgroundColor: '#fef2f2',
-            border: '1px solid #f87171',
-            borderRadius: '6px',
-            color: '#991b1b',
-            marginBottom: '1rem',
-          }}
+          style={{ ...commonStyles.alertError, marginBottom: '1.25rem' }}
         >
           {actionError}
         </div>
       )}
 
-      <header style={{ marginBottom: '1.5rem' }}>
+      <header
+        style={{
+          backgroundColor: '#ffffff',
+          border: '1px solid #e2e8f0',
+          borderRadius: '8px',
+          padding: '1.75rem',
+          boxShadow: '0 1px 3px 0 rgba(15, 23, 42, 0.04)',
+          marginBottom: '1.5rem',
+        }}
+      >
         <div
           style={{
             display: 'flex',
-            alignItems: 'center',
+            alignItems: 'flex-start',
             justifyContent: 'space-between',
             flexWrap: 'wrap',
             gap: '1rem',
           }}
         >
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#64748b', fontSize: '0.875rem' }}>
-              <span>#{item.id}</span>
-              <span>·</span>
-              <span style={{ textTransform: 'capitalize' }}>{item.type.replace(/_/g, ' ')}</span>
+          <div style={{ flex: '1 1 300px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#64748b', fontSize: '0.8125rem', marginBottom: '0.35rem' }}>
+              <span style={{ fontFamily: 'ui-monospace, monospace', fontWeight: 600, color: '#94a3b8' }}>#{item.id}</span>
+              <span>•</span>
+              <span style={{ textTransform: 'capitalize', fontWeight: 500 }}>{item.type.replace(/_/g, ' ')}</span>
             </div>
-            <h1 data-testid="item-title" style={{ fontSize: '1.75rem', fontWeight: 700, margin: '0.5rem 0' }}>
+            <h1 data-testid="item-title" style={{ fontSize: '1.625rem', fontWeight: 800, color: '#0f172a', margin: '0.25rem 0', letterSpacing: '-0.02em', lineHeight: 1.25 }}>
               {item.title}
             </h1>
           </div>
@@ -255,14 +265,7 @@ export function ItemDetail({
                 type="button"
                 data-testid="edit-button"
                 onClick={() => setIsEditing(true)}
-                style={{
-                  padding: '0.5rem 1rem',
-                  backgroundColor: '#f1f5f9',
-                  border: '1px solid #cbd5e1',
-                  borderRadius: '6px',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                }}
+                style={commonStyles.buttonSecondary}
               >
                 Edit
               </button>
@@ -275,13 +278,9 @@ export function ItemDetail({
                 disabled={isActionPending}
                 onClick={() => void handleClaim()}
                 style={{
-                  padding: '0.5rem 1rem',
-                  backgroundColor: '#2563eb',
-                  color: '#ffffff',
-                  border: 'none',
-                  borderRadius: '6px',
-                  fontWeight: 600,
+                  ...commonStyles.buttonPrimary,
                   cursor: isActionPending ? 'not-allowed' : 'pointer',
+                  opacity: isActionPending ? 0.7 : 1,
                 }}
               >
                 {claimMutation.isPending ? 'Claiming...' : 'Claim'}
@@ -295,13 +294,10 @@ export function ItemDetail({
                 disabled={isActionPending}
                 onClick={() => void handleTransition('awaiting_approval')}
                 style={{
-                  padding: '0.5rem 1rem',
-                  backgroundColor: '#0284c7',
-                  color: '#ffffff',
-                  border: 'none',
-                  borderRadius: '6px',
-                  fontWeight: 600,
+                  ...commonStyles.buttonPrimary,
+                  backgroundColor: '#7c3aed',
                   cursor: isActionPending ? 'not-allowed' : 'pointer',
+                  opacity: isActionPending ? 0.7 : 1,
                 }}
               >
                 Submit for Approval
@@ -315,13 +311,10 @@ export function ItemDetail({
                 disabled={isActionPending}
                 onClick={() => void handleTransition('resolved')}
                 style={{
-                  padding: '0.5rem 1rem',
-                  backgroundColor: '#16a34a',
-                  color: '#ffffff',
-                  border: 'none',
-                  borderRadius: '6px',
-                  fontWeight: 600,
+                  ...commonStyles.buttonPrimary,
+                  backgroundColor: '#059669',
                   cursor: isActionPending ? 'not-allowed' : 'pointer',
+                  opacity: isActionPending ? 0.7 : 1,
                 }}
               >
                 Approve
@@ -335,13 +328,12 @@ export function ItemDetail({
                 disabled={isActionPending}
                 onClick={() => void handleTransition('in_progress')}
                 style={{
-                  padding: '0.5rem 1rem',
-                  backgroundColor: '#ea580c',
-                  color: '#ffffff',
-                  border: 'none',
-                  borderRadius: '6px',
-                  fontWeight: 600,
+                  ...commonStyles.buttonSecondary,
+                  color: '#b45309',
+                  borderColor: '#fde68a',
+                  backgroundColor: '#fffbeb',
                   cursor: isActionPending ? 'not-allowed' : 'pointer',
+                  opacity: isActionPending ? 0.7 : 1,
                 }}
               >
                 Send Back
@@ -355,13 +347,9 @@ export function ItemDetail({
                 disabled={isActionPending}
                 onClick={() => void handleTransition('closed')}
                 style={{
-                  padding: '0.5rem 1rem',
-                  backgroundColor: '#475569',
-                  color: '#ffffff',
-                  border: 'none',
-                  borderRadius: '6px',
-                  fontWeight: 600,
+                  ...commonStyles.buttonSecondary,
                   cursor: isActionPending ? 'not-allowed' : 'pointer',
+                  opacity: isActionPending ? 0.7 : 1,
                 }}
               >
                 Close
@@ -375,13 +363,12 @@ export function ItemDetail({
                 disabled={isActionPending}
                 onClick={() => void handleTransition('open')}
                 style={{
-                  padding: '0.5rem 1rem',
-                  backgroundColor: '#2563eb',
-                  color: '#ffffff',
-                  border: 'none',
-                  borderRadius: '6px',
-                  fontWeight: 600,
+                  ...commonStyles.buttonSecondary,
+                  color: '#2563eb',
+                  borderColor: '#bfdbfe',
+                  backgroundColor: '#eff6ff',
                   cursor: isActionPending ? 'not-allowed' : 'pointer',
+                  opacity: isActionPending ? 0.7 : 1,
                 }}
               >
                 Reopen
@@ -395,13 +382,9 @@ export function ItemDetail({
                 disabled={isActionPending}
                 onClick={() => void handleTransition('cancelled')}
                 style={{
-                  padding: '0.5rem 1rem',
-                  backgroundColor: '#dc2626',
-                  color: '#ffffff',
-                  border: 'none',
-                  borderRadius: '6px',
-                  fontWeight: 600,
+                  ...commonStyles.buttonDanger,
                   cursor: isActionPending ? 'not-allowed' : 'pointer',
+                  opacity: isActionPending ? 0.7 : 1,
                 }}
               >
                 Cancel
@@ -415,14 +398,11 @@ export function ItemDetail({
         <section
           aria-label="Edit Item"
           style={{
+            ...commonStyles.cardPadded,
             marginBottom: '2rem',
-            padding: '1.5rem',
-            border: '1px solid #e2e8f0',
-            borderRadius: '8px',
-            backgroundColor: '#ffffff',
           }}
         >
-          <h2 style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: '1rem' }}>Edit Item</h2>
+          <h2 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '1.25rem', color: '#0f172a' }}>Edit Item</h2>
           <ItemForm
             item={item}
             userRole={effectiveRole}
@@ -441,62 +421,63 @@ export function ItemDetail({
             aria-label="Item Attributes"
             style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
               gap: '1rem',
-              padding: '1rem',
-              backgroundColor: '#f8fafc',
+              padding: '1.25rem',
+              backgroundColor: '#ffffff',
               border: '1px solid #e2e8f0',
               borderRadius: '8px',
+              boxShadow: '0 1px 3px 0 rgba(15, 23, 42, 0.04)',
               marginBottom: '1.5rem',
             }}
           >
             <div>
-              <span style={{ display: 'block', fontSize: '0.75rem', color: '#64748b', textTransform: 'uppercase' }}>
+              <span style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.35rem' }}>
                 Status
               </span>
               <span
                 data-testid="item-status"
-                style={{ fontWeight: 600, textTransform: 'capitalize', color: '#1e293b' }}
+                style={getStatusBadgeStyle(item.status)}
               >
                 {item.status.replace(/_/g, ' ')}
               </span>
             </div>
 
             <div>
-              <span style={{ display: 'block', fontSize: '0.75rem', color: '#64748b', textTransform: 'uppercase' }}>
+              <span style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.35rem' }}>
                 Priority
               </span>
               <span
                 data-testid="item-priority"
-                style={{ fontWeight: 600, textTransform: 'capitalize', color: '#92400e' }}
+                style={getPriorityBadgeStyle(item.priority)}
               >
                 {item.priority}
               </span>
             </div>
 
             <div>
-              <span style={{ display: 'block', fontSize: '0.75rem', color: '#64748b', textTransform: 'uppercase' }}>
+              <span style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.35rem' }}>
                 Assignee
               </span>
-              <span data-testid="item-assignee" style={{ fontWeight: 600, color: '#1e293b' }}>
+              <span data-testid="item-assignee" style={{ fontWeight: 600, color: item.assignee ? '#0f172a' : '#94a3b8', fontSize: '0.875rem' }}>
                 {assigneeName}
               </span>
             </div>
 
             <div>
-              <span style={{ display: 'block', fontSize: '0.75rem', color: '#64748b', textTransform: 'uppercase' }}>
+              <span style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.35rem' }}>
                 Creator
               </span>
-              <span data-testid="item-creator" style={{ fontWeight: 600, color: '#1e293b' }}>
+              <span data-testid="item-creator" style={{ fontWeight: 600, color: '#0f172a', fontSize: '0.875rem' }}>
                 {creatorName}
               </span>
             </div>
 
             <div>
-              <span style={{ display: 'block', fontSize: '0.75rem', color: '#64748b', textTransform: 'uppercase' }}>
+              <span style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.35rem' }}>
                 Due Date
               </span>
-              <span data-testid="item-due" style={{ fontWeight: 600, color: '#1e293b' }}>
+              <span data-testid="item-due" style={{ fontWeight: 600, color: item.dueAt ? '#0f172a' : '#94a3b8', fontSize: '0.875rem' }}>
                 {dueDate}
               </span>
             </div>
@@ -504,16 +485,21 @@ export function ItemDetail({
 
           {/* Description */}
           <section aria-label="Description" style={{ marginBottom: '2rem' }}>
-            <h2 style={{ fontSize: '1.2rem', fontWeight: 600, marginBottom: '0.5rem' }}>Description</h2>
+            <h2 style={{ fontSize: '1.125rem', fontWeight: 700, color: '#0f172a', marginBottom: '0.625rem' }}>
+              Description
+            </h2>
             <div
               data-testid="item-description"
               style={{
-                padding: '1rem',
+                padding: '1.25rem',
                 border: '1px solid #e2e8f0',
                 borderRadius: '8px',
                 backgroundColor: '#ffffff',
+                boxShadow: '0 1px 3px 0 rgba(15, 23, 42, 0.04)',
                 whiteSpace: 'pre-wrap',
-                color: item.description ? '#1e293b' : '#64748b',
+                color: item.description ? '#1e293b' : '#94a3b8',
+                fontSize: '0.9375rem',
+                lineHeight: 1.6,
               }}
             >
               {item.description || 'No description provided.'}
@@ -523,8 +509,10 @@ export function ItemDetail({
       )}
 
       {/* Activity Timeline */}
-      <section aria-label="Activity History">
-        <h2 style={{ fontSize: '1.2rem', fontWeight: 600, marginBottom: '1rem' }}>Activity</h2>
+      <section aria-label="Activity History" style={{ marginTop: '2rem' }}>
+        <h2 style={{ fontSize: '1.125rem', fontWeight: 700, color: '#0f172a', marginBottom: '0.875rem' }}>
+          Activity & Audit Log
+        </h2>
         <ActivityTimeline
           events={activityQuery.data?.events ?? []}
           isLoading={activityQuery.isLoading}

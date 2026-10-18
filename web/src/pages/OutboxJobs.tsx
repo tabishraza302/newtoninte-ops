@@ -10,6 +10,7 @@ import {
   type JobView,
 } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
+import { commonStyles, theme } from '../theme'
 
 const SUMMARY_STATS: JobStatus[] = ['pending', 'processing', 'done', 'failed']
 
@@ -17,7 +18,11 @@ export function OutboxJobs(): React.ReactElement {
   const { user, status } = useAuth()
 
   if (status === 'loading') {
-    return <div role="status">Loading...</div>
+    return (
+      <div role="status" style={{ padding: '3rem', textAlign: 'center', color: '#64748b' }}>
+        Loading Outbox Jobs...
+      </div>
+    )
   }
 
   if (status === 'anon' || !user) {
@@ -26,19 +31,18 @@ export function OutboxJobs(): React.ReactElement {
 
   if (!user.isAdmin) {
     return (
-      <div style={{ padding: '1.5rem', maxWidth: '1200px', margin: '0 auto' }}>
+      <div style={commonStyles.narrowContainer}>
         <div
           role="alert"
           style={{
-            padding: '1rem',
-            borderRadius: '8px',
-            border: '1px solid #fca5a5',
-            backgroundColor: '#fef2f2',
-            color: '#b91c1c',
-            fontWeight: 600,
+            ...commonStyles.alertError,
+            padding: '1.5rem',
+            textAlign: 'center',
+            display: 'block',
           }}
         >
-          Not authorised — the outbox jobs screen is admin only.
+          <div style={{ fontWeight: 700, fontSize: '1rem', marginBottom: '0.25rem' }}>Access Denied</div>
+          <div>Not authorised - the outbox jobs screen is admin only.</div>
         </div>
       </div>
     )
@@ -102,21 +106,58 @@ export function OutboxJobsTable(): React.ReactElement {
   const oldestPendingAgeSec = summary.data?.oldestPendingAgeSec ?? null
   const failedCount = byStatus?.failed ?? 0
 
+  const getJobStatusBadge = (status: JobStatus): React.CSSProperties => {
+    switch (status) {
+      case 'failed':
+        return {
+          ...commonStyles.badgePill,
+          backgroundColor: '#fef2f2',
+          color: '#dc2626',
+          borderColor: '#fecaca',
+        }
+      case 'done':
+        return {
+          ...commonStyles.badgePill,
+          backgroundColor: '#ecfdf5',
+          color: '#059669',
+          borderColor: '#a7f3d0',
+        }
+      case 'processing':
+        return {
+          ...commonStyles.badgePill,
+          backgroundColor: '#fffbeb',
+          color: '#b45309',
+          borderColor: '#fde68a',
+        }
+      case 'pending':
+      default:
+        return {
+          ...commonStyles.badgePill,
+          backgroundColor: '#f0f9ff',
+          color: '#0284c7',
+          borderColor: '#bae6fd',
+        }
+    }
+  }
+
   return (
-    <div className="outbox-jobs-page" style={{ padding: '1.5rem', maxWidth: '1200px', margin: '0 auto' }}>
-      <header style={{ marginBottom: '1.5rem' }}>
-        <h1 style={{ fontSize: '1.75rem', fontWeight: 700, margin: 0 }}>Outbox Jobs</h1>
-        <p style={{ margin: '0.35rem 0 0', color: '#64748b', fontSize: '0.875rem' }}>
-          Background job queue — failed jobs stay visible and can be retried.
+    <div className="outbox-jobs-page" style={commonStyles.pageContainer}>
+      <header style={{ marginBottom: '1.75rem' }}>
+        <h1 style={{ fontSize: '1.75rem', fontWeight: 800, color: '#0f172a', margin: '0 0 0.35rem', letterSpacing: '-0.02em' }}>
+          Outbox Jobs
+        </h1>
+        <p style={{ margin: 0, color: '#64748b', fontSize: '0.875rem' }}>
+          Background job queue and email delivery pipeline. Failed jobs stay visible and can be retried.
         </p>
       </header>
 
+      {/* Summary Cards */}
       <section
         aria-label="Job summary"
         data-testid="job-summary"
         style={{
-          display: 'flex',
-          flexWrap: 'wrap',
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
           gap: '1rem',
           marginBottom: '1.5rem',
         }}
@@ -124,29 +165,31 @@ export function OutboxJobsTable(): React.ReactElement {
         {SUMMARY_STATS.map((stat) => {
           const count = byStatus ? byStatus[stat] : null
           const isFailed = stat === 'failed'
+          const hasFailures = isFailed && failedCount > 0
           return (
             <div
               key={stat}
               style={{
-                flex: '1 1 120px',
-                padding: '0.75rem 1rem',
+                padding: '1.125rem 1.25rem',
                 borderRadius: '8px',
-                border: `1px solid ${isFailed && failedCount > 0 ? '#fca5a5' : '#e2e8f0'}`,
-                backgroundColor: isFailed && failedCount > 0 ? '#fef2f2' : '#f8fafc',
+                border: `1px solid ${hasFailures ? '#fecaca' : '#e2e8f0'}`,
+                backgroundColor: hasFailures ? '#fef2f2' : '#ffffff',
+                boxShadow: '0 1px 3px 0 rgba(15, 23, 42, 0.04)',
               }}
             >
-              <div style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#64748b' }}>
+              <div style={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: hasFailures ? '#dc2626' : '#64748b', marginBottom: '0.25rem' }}>
                 {stat}
               </div>
               <div
                 data-testid={`summary-${stat}`}
                 style={{
-                  fontSize: '1.5rem',
-                  fontWeight: 700,
-                  color: isFailed && failedCount > 0 ? '#b91c1c' : '#0f172a',
+                  fontSize: '1.75rem',
+                  fontWeight: 800,
+                  color: hasFailures ? '#b91c1c' : '#0f172a',
+                  lineHeight: 1.1,
                 }}
               >
-                {count ?? '—'}
+                {count ?? '-'}
               </div>
             </div>
           )
@@ -154,24 +197,24 @@ export function OutboxJobsTable(): React.ReactElement {
 
         <div
           style={{
-            flex: '1 1 120px',
-            padding: '0.75rem 1rem',
+            padding: '1.125rem 1.25rem',
             borderRadius: '8px',
             border: '1px solid #e2e8f0',
-            backgroundColor: '#f8fafc',
+            backgroundColor: '#ffffff',
+            boxShadow: '0 1px 3px 0 rgba(15, 23, 42, 0.04)',
           }}
         >
-          <div style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: '#64748b' }}>
+          <div style={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: '#64748b', marginBottom: '0.25rem' }}>
             Oldest pending
           </div>
-          <div data-testid="summary-oldest-pending" style={{ fontSize: '1.5rem', fontWeight: 700, color: '#0f172a' }}>
-            {oldestPendingAgeSec === null ? '—' : `${oldestPendingAgeSec}s`}
+          <div data-testid="summary-oldest-pending" style={{ fontSize: '1.75rem', fontWeight: 800, color: '#0f172a', lineHeight: 1.1 }}>
+            {oldestPendingAgeSec === null ? '-' : `${oldestPendingAgeSec}s`}
           </div>
         </div>
       </section>
 
       {summary.error && (
-        <div role="alert" style={{ color: '#dc2626', padding: '0 0 1rem' }}>
+        <div role="alert" style={{ ...commonStyles.alertError, marginBottom: '1.5rem' }}>
           Failed to load job summary
         </div>
       )}
@@ -183,16 +226,17 @@ export function OutboxJobsTable(): React.ReactElement {
           display: 'flex',
           flexWrap: 'wrap',
           gap: '1rem',
-          padding: '1rem',
-          backgroundColor: '#f8fafc',
+          padding: '1.25rem',
+          backgroundColor: '#ffffff',
           borderRadius: '8px',
           border: '1px solid #e2e8f0',
+          boxShadow: '0 1px 3px 0 rgba(15, 23, 42, 0.04)',
           marginBottom: '1.5rem',
           alignItems: 'center',
         }}
       >
-        <div style={{ minWidth: '150px' }}>
-          <label htmlFor="job-status-select" style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, marginBottom: '0.25rem' }}>
+        <div style={{ minWidth: '180px', flex: '1 1 160px' }}>
+          <label htmlFor="job-status-select" style={commonStyles.label}>
             Status
           </label>
           <select
@@ -200,13 +244,7 @@ export function OutboxJobsTable(): React.ReactElement {
             aria-label="Status"
             value={statusParam}
             onChange={(e) => updateParam('status', e.target.value)}
-            style={{
-              width: '100%',
-              padding: '0.5rem 0.75rem',
-              borderRadius: '6px',
-              border: '1px solid #cbd5e1',
-              backgroundColor: '#fff',
-            }}
+            style={commonStyles.select}
           >
             <option value="">All Statuses</option>
             {JOB_STATUSES.map((s) => (
@@ -217,8 +255,8 @@ export function OutboxJobsTable(): React.ReactElement {
           </select>
         </div>
 
-        <div style={{ minWidth: '150px' }}>
-          <label htmlFor="job-type-select" style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, marginBottom: '0.25rem' }}>
+        <div style={{ minWidth: '180px', flex: '1 1 160px' }}>
+          <label htmlFor="job-type-select" style={commonStyles.label}>
             Type
           </label>
           <select
@@ -226,13 +264,7 @@ export function OutboxJobsTable(): React.ReactElement {
             aria-label="Type"
             value={typeParam}
             onChange={(e) => updateParam('type', e.target.value)}
-            style={{
-              width: '100%',
-              padding: '0.5rem 0.75rem',
-              borderRadius: '6px',
-              border: '1px solid #cbd5e1',
-              backgroundColor: '#fff',
-            }}
+            style={commonStyles.select}
           >
             <option value="">All Types</option>
             {JOB_TYPES.map((t) => (
@@ -246,16 +278,31 @@ export function OutboxJobsTable(): React.ReactElement {
 
       {/* Content */}
       <section aria-label="Outbox Jobs List">
-        {isLoading && jobs.length === 0 && <div role="status">Loading jobs...</div>}
+        {isLoading && jobs.length === 0 && (
+          <div
+            role="status"
+            style={{
+              padding: '3rem',
+              textAlign: 'center',
+              color: '#64748b',
+              backgroundColor: '#ffffff',
+              borderRadius: '8px',
+              border: '1px solid #e2e8f0',
+              fontSize: '0.875rem',
+            }}
+          >
+            Loading jobs...
+          </div>
+        )}
 
         {error && (
-          <div role="alert" style={{ color: '#dc2626', padding: '1rem' }}>
+          <div role="alert" style={{ ...commonStyles.alertError, marginBottom: '1.5rem' }}>
             Failed to load jobs
           </div>
         )}
 
         {retryJob.error && (
-          <div role="alert" style={{ color: '#dc2626', padding: '0 0 1rem' }}>
+          <div role="alert" style={{ ...commonStyles.alertError, marginBottom: '1.5rem' }}>
             Retry failed: {retryJob.error.message}
           </div>
         )}
@@ -265,14 +312,20 @@ export function OutboxJobsTable(): React.ReactElement {
             role="status"
             data-testid="empty-state"
             style={{
-              padding: '3rem 1rem',
+              padding: '4rem 1.5rem',
               textAlign: 'center',
               color: '#64748b',
-              background: '#f8fafc',
+              background: '#ffffff',
               borderRadius: '8px',
+              border: '1px dashed #cbd5e1',
             }}
           >
-            No jobs found
+            <div style={{ fontWeight: 600, color: '#0f172a', marginBottom: '0.25rem', fontSize: '1rem' }}>
+              No jobs found
+            </div>
+            <div style={{ fontSize: '0.875rem' }}>
+              No background outbox jobs match the selected filters
+            </div>
           </div>
         )}
 
@@ -284,54 +337,51 @@ export function OutboxJobsTable(): React.ReactElement {
               borderRadius: '8px',
               overflowX: 'auto',
               backgroundColor: '#ffffff',
+              boxShadow: '0 1px 3px 0 rgba(15, 23, 42, 0.04)',
               marginBottom: '1.5rem',
             }}
           >
             <table data-testid="jobs-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
               <thead>
-                <tr style={{ backgroundColor: '#f1f5f9', textAlign: 'left' }}>
-                  <th scope="col" style={{ padding: '0.625rem 0.75rem', borderBottom: '1px solid #e2e8f0' }}>ID</th>
-                  <th scope="col" style={{ padding: '0.625rem 0.75rem', borderBottom: '1px solid #e2e8f0' }}>Type</th>
-                  <th scope="col" style={{ padding: '0.625rem 0.75rem', borderBottom: '1px solid #e2e8f0' }}>Status</th>
-                  <th scope="col" style={{ padding: '0.625rem 0.75rem', borderBottom: '1px solid #e2e8f0' }}>Attempts</th>
-                  <th scope="col" style={{ padding: '0.625rem 0.75rem', borderBottom: '1px solid #e2e8f0' }}>Last error</th>
-                  <th scope="col" style={{ padding: '0.625rem 0.75rem', borderBottom: '1px solid #e2e8f0' }}>Actions</th>
+                <tr style={{ backgroundColor: '#f8fafc', textAlign: 'left' }}>
+                  <th scope="col" style={{ padding: '0.75rem 1rem', borderBottom: '1px solid #e2e8f0', fontSize: '0.75rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em' }}>ID</th>
+                  <th scope="col" style={{ padding: '0.75rem 1rem', borderBottom: '1px solid #e2e8f0', fontSize: '0.75rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Type</th>
+                  <th scope="col" style={{ padding: '0.75rem 1rem', borderBottom: '1px solid #e2e8f0', fontSize: '0.75rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Status</th>
+                  <th scope="col" style={{ padding: '0.75rem 1rem', borderBottom: '1px solid #e2e8f0', fontSize: '0.75rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Attempts</th>
+                  <th scope="col" style={{ padding: '0.75rem 1rem', borderBottom: '1px solid #e2e8f0', fontSize: '0.75rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Last error</th>
+                  <th scope="col" style={{ padding: '0.75rem 1rem', borderBottom: '1px solid #e2e8f0', fontSize: '0.75rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {jobs.map((job) => (
-                  <tr key={job.id} style={{ borderBottom: '1px solid #f1f5f9', verticalAlign: 'top' }}>
-                    <td style={{ padding: '0.625rem 0.75rem', color: '#64748b' }}>{job.id}</td>
-                    <td style={{ padding: '0.625rem 0.75rem', fontFamily: 'monospace' }}>{job.type}</td>
-                    <td style={{ padding: '0.625rem 0.75rem' }}>
-                      <span
-                        style={{
-                          padding: '0.125rem 0.5rem',
-                          borderRadius: '999px',
-                          fontSize: '0.75rem',
-                          fontWeight: 600,
-                          backgroundColor: job.status === 'failed' ? '#fee2e2' : '#e2e8f0',
-                          color: job.status === 'failed' ? '#b91c1c' : '#334155',
-                        }}
-                      >
+                  <tr key={job.id} style={{ borderBottom: '1px solid #f1f5f9', verticalAlign: 'middle' }}>
+                    <td style={{ padding: '0.875rem 1rem', color: '#64748b', fontFamily: 'ui-monospace, monospace', fontWeight: 600, fontSize: '0.8125rem' }}>
+                      #{job.id}
+                    </td>
+                    <td style={{ padding: '0.875rem 1rem', fontFamily: 'ui-monospace, monospace', fontSize: '0.8125rem', color: '#0f172a', fontWeight: 500 }}>
+                      {job.type}
+                    </td>
+                    <td style={{ padding: '0.875rem 1rem' }}>
+                      <span style={getJobStatusBadge(job.status)}>
                         {job.status}
                       </span>
                     </td>
-                    <td style={{ padding: '0.625rem 0.75rem' }}>
+                    <td style={{ padding: '0.875rem 1rem', fontSize: '0.8125rem', color: '#334155', fontWeight: 500 }}>
                       {job.attempts}/{job.maxAttempts}
                     </td>
                     <td
                       style={{
-                        padding: '0.625rem 0.75rem',
-                        fontFamily: 'monospace',
+                        padding: '0.875rem 1rem',
+                        fontFamily: 'ui-monospace, monospace',
+                        fontSize: '0.75rem',
                         color: job.lastError ? '#b91c1c' : '#94a3b8',
                         maxWidth: '28rem',
                         wordBreak: 'break-word',
                       }}
                     >
-                      {job.lastError ?? '—'}
+                      {job.lastError ?? '-'}
                     </td>
-                    <td style={{ padding: '0.625rem 0.75rem' }}>
+                    <td style={{ padding: '0.875rem 1rem' }}>
                       <button
                         type="button"
                         onClick={() =>
@@ -339,10 +389,6 @@ export function OutboxJobsTable(): React.ReactElement {
                             { id: job.id },
                             {
                               onSuccess: () => {
-                                // The server re-queued this job, and a cursor page is never a
-                                // complete list: reset to page 1 so the effect above *replaces*
-                                // the list from a fresh first page instead of merging into a
-                                // stale one that still holds the retried row as `failed`.
                                 setCursor(undefined)
                                 setJobs([])
                               },
@@ -353,12 +399,15 @@ export function OutboxJobsTable(): React.ReactElement {
                         style={{
                           padding: '0.35rem 0.85rem',
                           borderRadius: '6px',
-                          border: '1px solid #cbd5e1',
+                          border: job.status === 'failed' ? '1px solid transparent' : '1px solid #cbd5e1',
                           backgroundColor: job.status === 'failed' ? '#2563eb' : '#f1f5f9',
                           color: job.status === 'failed' ? '#ffffff' : '#94a3b8',
                           fontWeight: 600,
                           fontSize: '0.8125rem',
                           cursor: job.status === 'failed' ? 'pointer' : 'not-allowed',
+                          fontFamily: 'inherit',
+                          transition: 'all 0.15s ease',
+                          boxShadow: job.status === 'failed' ? '0 1px 2px 0 rgba(37, 99, 235, 0.2)' : 'none',
                         }}
                       >
                         Retry
@@ -372,17 +421,15 @@ export function OutboxJobsTable(): React.ReactElement {
         )}
 
         {nextCursor && (
-          <div style={{ textAlign: 'center', marginTop: '1rem' }}>
+          <div style={{ textAlign: 'center', marginTop: '1.5rem' }}>
             <button
               type="button"
               onClick={() => setCursor(nextCursor)}
               disabled={isFetching}
               style={{
-                padding: '0.6rem 1.5rem',
-                backgroundColor: '#2563eb',
-                color: '#ffffff',
-                border: 'none',
-                borderRadius: '6px',
+                ...commonStyles.buttonSecondary,
+                padding: '0.65rem 1.75rem',
+                fontSize: '0.875rem',
                 fontWeight: 600,
                 cursor: isFetching ? 'not-allowed' : 'pointer',
                 opacity: isFetching ? 0.7 : 1,

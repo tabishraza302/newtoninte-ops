@@ -1,6 +1,7 @@
 import React from 'react'
 import { Link } from 'react-router-dom'
 import type { WorkItem } from '../api/types'
+import { getStatusBadgeStyle, getPriorityBadgeStyle } from '../theme'
 
 export interface ItemRowProps {
   item: WorkItem
@@ -18,33 +19,40 @@ export function ItemRow({ item }: ItemRowProps): React.ReactElement {
         display: 'flex',
         alignItems: 'center',
         gap: '1rem',
-        padding: '0.75rem 1rem',
-        borderBottom: '1px solid #e2e8f0',
+        padding: '0.875rem 1.25rem',
+        borderBottom: '1px solid #f1f5f9',
+        backgroundColor: '#ffffff',
+        transition: 'background-color 0.15s ease',
       }}
     >
-      <div style={{ flex: 2 }}>
+      <div style={{ flex: 2.5, minWidth: 0 }}>
         <Link
           to={`/items/${item.id}`}
-          style={{ fontWeight: 600, color: '#2563eb', textDecoration: 'none' }}
+          style={{
+            fontWeight: 600,
+            color: '#0f172a',
+            textDecoration: 'none',
+            fontSize: '0.9375rem',
+            lineHeight: 1.3,
+            display: 'inline-block',
+            transition: 'color 0.15s ease',
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.color = '#2563eb')}
+          onMouseLeave={(e) => (e.currentTarget.style.color = '#0f172a')}
         >
           {item.title}
         </Link>
-        <div style={{ fontSize: '0.875rem', color: '#64748b' }}>
-          #{item.id} · {item.type}
+        <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.2rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <span style={{ fontFamily: 'ui-monospace, monospace', color: '#94a3b8', fontWeight: 600 }}>#{item.id}</span>
+          <span style={{ color: '#cbd5e1' }}>•</span>
+          <span style={{ textTransform: 'capitalize', color: '#475569' }}>{item.type}</span>
         </div>
       </div>
 
-      <div style={{ flex: 1 }}>
+      <div style={{ flex: 1.2 }}>
         <span
           data-testid="item-status"
-          style={{
-            display: 'inline-block',
-            padding: '0.2rem 0.5rem',
-            borderRadius: '4px',
-            fontSize: '0.85rem',
-            backgroundColor: '#f1f5f9',
-            textTransform: 'capitalize',
-          }}
+          style={getStatusBadgeStyle(item.status)}
         >
           {item.status.replace(/_/g, ' ')}
         </span>
@@ -53,25 +61,17 @@ export function ItemRow({ item }: ItemRowProps): React.ReactElement {
       <div style={{ flex: 1 }}>
         <span
           data-testid="item-priority"
-          style={{
-            display: 'inline-block',
-            padding: '0.2rem 0.5rem',
-            borderRadius: '4px',
-            fontSize: '0.85rem',
-            backgroundColor: '#fef3c7',
-            color: '#92400e',
-            textTransform: 'capitalize',
-          }}
+          style={getPriorityBadgeStyle(item.priority)}
         >
           {item.priority}
         </span>
       </div>
 
-      <div style={{ flex: 1, fontSize: '0.875rem', color: '#334155' }}>
+      <div style={{ flex: 1.2, fontSize: '0.8125rem', color: item.assignee ? '#334155' : '#94a3b8', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {assigneeName}
       </div>
 
-      <div style={{ flex: 1, fontSize: '0.875rem', color: '#64748b' }}>
+      <div style={{ flex: 1, fontSize: '0.8125rem', color: '#64748b', textAlign: 'right', whiteSpace: 'nowrap' }}>
         {dueDate}
       </div>
     </div>

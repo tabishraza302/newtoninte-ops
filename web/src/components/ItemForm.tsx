@@ -11,6 +11,7 @@ import {
   type Role,
   type WorkItem,
 } from '../api/types'
+import { commonStyles } from '../theme'
 
 export interface ItemFormProps {
   item?: WorkItem
@@ -154,22 +155,23 @@ export function ItemForm({
     <form
       data-testid="item-form"
       onSubmit={(e) => void handleSubmit(e)}
-      style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', maxWidth: '600px' }}
+      style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', maxWidth: '640px' }}
     >
       {versionConflict && (
         <div
           role="alert"
           data-testid="version-conflict"
           style={{
-            padding: '1rem',
+            padding: '1rem 1.25rem',
             backgroundColor: '#fef2f2',
-            border: '1px solid #f87171',
-            borderRadius: '6px',
+            border: '1px solid #fecaca',
+            borderRadius: '8px',
             color: '#991b1b',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
             gap: '1rem',
+            fontSize: '0.875rem',
           }}
         >
           <span>This item has changed — reload to view the latest version.</span>
@@ -182,9 +184,11 @@ export function ItemForm({
               backgroundColor: '#dc2626',
               color: '#ffffff',
               border: 'none',
-              borderRadius: '4px',
+              borderRadius: '6px',
               cursor: 'pointer',
               fontWeight: 600,
+              fontSize: '0.8125rem',
+              fontFamily: 'inherit',
             }}
           >
             Reload
@@ -196,13 +200,7 @@ export function ItemForm({
         <div
           role="alert"
           data-testid="form-error"
-          style={{
-            padding: '0.75rem 1rem',
-            backgroundColor: '#fef2f2',
-            border: '1px solid #f87171',
-            borderRadius: '6px',
-            color: '#991b1b',
-          }}
+          style={commonStyles.alertError}
         >
           {errorMessage}
         </div>
@@ -211,7 +209,7 @@ export function ItemForm({
       <div>
         <label
           htmlFor="item-title"
-          style={{ display: 'block', fontWeight: 600, marginBottom: '0.35rem', fontSize: '0.875rem' }}
+          style={commonStyles.label}
         >
           Title
         </label>
@@ -222,22 +220,15 @@ export function ItemForm({
           required
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="Enter item title"
-          style={{
-            width: '100%',
-            padding: '0.5rem 0.75rem',
-            border: '1px solid #cbd5e1',
-            borderRadius: '6px',
-            fontSize: '1rem',
-            boxSizing: 'border-box',
-          }}
+          placeholder="e.g. Chase overdue customer invoice"
+          style={commonStyles.input}
         />
       </div>
 
       <div>
         <label
           htmlFor="item-description"
-          style={{ display: 'block', fontWeight: 600, marginBottom: '0.35rem', fontSize: '0.875rem' }}
+          style={commonStyles.label}
         >
           Description
         </label>
@@ -247,15 +238,11 @@ export function ItemForm({
           rows={4}
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          placeholder="Enter item description"
+          placeholder="Add context, references, or reproduction steps..."
           style={{
-            width: '100%',
-            padding: '0.5rem 0.75rem',
-            border: '1px solid #cbd5e1',
-            borderRadius: '6px',
-            fontSize: '1rem',
-            boxSizing: 'border-box',
-            fontFamily: 'inherit',
+            ...commonStyles.input,
+            minHeight: '100px',
+            resize: 'vertical',
           }}
         />
       </div>
@@ -264,7 +251,7 @@ export function ItemForm({
         <div>
           <label
             htmlFor="item-type"
-            style={{ display: 'block', fontWeight: 600, marginBottom: '0.35rem', fontSize: '0.875rem' }}
+            style={commonStyles.label}
           >
             Type
           </label>
@@ -273,14 +260,7 @@ export function ItemForm({
             name="type"
             value={type}
             onChange={(e) => setType(e.target.value as ItemType)}
-            style={{
-              width: '100%',
-              padding: '0.5rem 0.75rem',
-              border: '1px solid #cbd5e1',
-              borderRadius: '6px',
-              fontSize: '1rem',
-              backgroundColor: '#ffffff',
-            }}
+            style={commonStyles.select}
           >
             {ITEM_TYPES.map((t) => (
               <option key={t} value={t}>
@@ -294,7 +274,7 @@ export function ItemForm({
           <div>
             <label
               htmlFor="item-priority"
-              style={{ display: 'block', fontWeight: 600, marginBottom: '0.35rem', fontSize: '0.875rem' }}
+              style={commonStyles.label}
             >
               Priority
             </label>
@@ -303,14 +283,7 @@ export function ItemForm({
               name="priority"
               value={priority}
               onChange={(e) => setPriority(e.target.value as Priority)}
-              style={{
-                width: '100%',
-                padding: '0.5rem 0.75rem',
-                border: '1px solid #cbd5e1',
-                borderRadius: '6px',
-                fontSize: '1rem',
-                backgroundColor: '#ffffff',
-              }}
+              style={commonStyles.select}
             >
               {PRIORITIES.map((p) => (
                 <option key={p} value={p}>
@@ -324,7 +297,7 @@ export function ItemForm({
         <div>
           <label
             htmlFor="item-due-date"
-            style={{ display: 'block', fontWeight: 600, marginBottom: '0.35rem', fontSize: '0.875rem' }}
+            style={commonStyles.label}
           >
             Due Date
           </label>
@@ -334,14 +307,7 @@ export function ItemForm({
             type="date"
             value={dueDate}
             onChange={(e) => setDueDate(e.target.value)}
-            style={{
-              width: '100%',
-              padding: '0.5rem 0.75rem',
-              border: '1px solid #cbd5e1',
-              borderRadius: '6px',
-              fontSize: '1rem',
-              boxSizing: 'border-box',
-            }}
+            style={commonStyles.input}
           />
         </div>
       </div>
@@ -351,14 +317,9 @@ export function ItemForm({
           type="submit"
           disabled={isSubmitting}
           style={{
-            padding: '0.6rem 1.25rem',
-            backgroundColor: '#2563eb',
-            color: '#ffffff',
-            border: 'none',
-            borderRadius: '6px',
-            fontSize: '1rem',
-            fontWeight: 600,
+            ...commonStyles.buttonPrimary,
             cursor: isSubmitting ? 'not-allowed' : 'pointer',
+            opacity: isSubmitting ? 0.75 : 1,
           }}
         >
           {isSubmitting ? 'Saving...' : isEditing ? 'Save Changes' : 'Create Item'}
@@ -369,16 +330,7 @@ export function ItemForm({
             type="button"
             onClick={onCancel}
             disabled={isSubmitting}
-            style={{
-              padding: '0.6rem 1.25rem',
-              backgroundColor: '#f1f5f9',
-              color: '#334155',
-              border: '1px solid #cbd5e1',
-              borderRadius: '6px',
-              fontSize: '1rem',
-              fontWeight: 500,
-              cursor: 'pointer',
-            }}
+            style={commonStyles.buttonSecondary}
           >
             Cancel
           </button>
