@@ -19,9 +19,9 @@ export default defineConfig({
       // Non-default on purpose: tokens.test.ts proves the TTL is read from
       // config rather than hard-coded to the 900s default.
       ACCESS_TOKEN_TTL_SEC: '1234',
-      // The running Mailpit sink (native, not Docker). The app's default
-      // points at the compose hostname `smtp://mailpit:1025`, which does not
-      // resolve here; this makes the real-SMTP round-trip test run.
+      // Mailpit is the compose container, its SMTP port published on the host.
+      // The app's default points at the compose-network hostname
+      // `smtp://mailpit:1025`, which does not resolve here; this tests the real send.
       SMTP_URL: 'smtp://localhost:1025',
     },
   },

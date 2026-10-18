@@ -130,7 +130,7 @@ function buildItemRows(startIndex: number, count: number, demoTeams: TeamRow[], 
 /**
  * Idempotently seeds the demo dataset and returns the row counts present
  * afterwards. Teams, users and memberships upsert on their unique keys
- * (`INSERT ... ON DUPLICATE KEY UPDATE id = id`, which MariaDB applies to any
+ * (`INSERT ... ON DUPLICATE KEY UPDATE id = id`, which MySQL applies to any
  * unique-key collision), so re-runs never duplicate those rows. `work_items`
  * has no unique constraint, so items are seeded by count instead: each call
  * inserts only the shortfall up to TARGET_ITEMS for the two demo teams, so a
