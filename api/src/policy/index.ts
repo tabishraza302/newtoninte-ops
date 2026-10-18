@@ -90,11 +90,14 @@ export async function can(
     case 'invitation:manage':
     case 'membership:manage':
       return role === 'lead'
-    // Assignee / creator dependent (§6): a lead may always do these.
+    // Assignee / creator dependent (§6): a lead may always do these. The
+    // assignee/creator clause requires member standing — permission is
+    // resolved for the resource's team, never once for the user (§7), and
+    // the viewer column is — for both transitions.
     case 'item:submit':
-      return role === 'lead' || (resource.kind === 'item' && actor.id === resource.assigneeId)
+      return role === 'lead' || (role === 'member' && resource.kind === 'item' && actor.id === resource.assigneeId)
     case 'item:cancel':
-      return role === 'lead' || (resource.kind === 'item' && actor.id === resource.creatorId)
+      return role === 'lead' || (role === 'member' && resource.kind === 'item' && actor.id === resource.creatorId)
     default: {
       const exhaustive: never = action
       return exhaustive

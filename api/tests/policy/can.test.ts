@@ -48,4 +48,20 @@ describe('can', () => {
     expect(await can({ id: member.id, isAdmin: false }, 'item:submit', res)).toBe(false)
     expect(await can({ id: other.id, isAdmin: false }, 'item:submit', res)).toBe(true)
   })
+  it('submit/cancel require team membership for the assignee/creator clause', async () => {
+    const team = await seedTeam()
+    const nonMember = await seedUser({ email: 'nm@x' }); const viewer = await seedUser({ email: 'vw@x' })
+    await seedMembership(viewer.id, team.id, 'viewer')
+    const owned = await seedItem(team.id, { assigneeId: nonMember.id, createdBy: nonMember.id })
+    const ownedRes = { kind: 'item' as const, teamId: team.id, creatorId: owned.createdBy, assigneeId: owned.assigneeId }
+    const a = (id: number, isAdmin = false): Actor => ({ id, isAdmin })
+    // non-member named as assignee → submit denied
+    expect(await can(a(nonMember.id), 'item:submit', ownedRes)).toBe(false)
+    // non-member named as creator → cancel denied
+    expect(await can(a(nonMember.id), 'item:cancel', ownedRes)).toBe(false)
+    // viewer named as assignee → submit denied (viewer column is — in §7)
+    const viewerItem = await seedItem(team.id, { assigneeId: viewer.id, createdBy: viewer.id })
+    const viewerRes = { kind: 'item' as const, teamId: team.id, creatorId: viewerItem.createdBy, assigneeId: viewerItem.assigneeId }
+    expect(await can(a(viewer.id), 'item:submit', viewerRes)).toBe(false)
+  })
 })
