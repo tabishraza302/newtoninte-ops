@@ -7,6 +7,8 @@ import { NotificationLiveProvider } from './NotificationLiveProvider'
 import { AuthContext, type AuthContextValue, type User } from '../auth/AuthContext'
 import type { CollaborationNotification } from '../api/types'
 import { createTestQueryClient } from '../test/test-utils'
+import { useInfiniteNotifications } from '../api/hooks'
+import { connectNotificationStream } from '../api/notificationStream'
 import { Notifications } from '../pages/Notifications'
 
 const mockUserOne: User = {
@@ -82,6 +84,7 @@ describe('NotificationLiveProvider', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     globalThis.fetch = originalFetch
   })
 
@@ -596,5 +599,434 @@ describe('NotificationLiveProvider', () => {
     })
 
     expect(screen.queryByTestId('notification-toast-60')).toBeNull()
+  })
+
+  it('invalidates inbox list query on summary event, updating consumer DOM', async () => {
+    const sse = createMockSSEStream()
+    let inboxCallCount = 0
+
+    globalThis.fetch = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      if (url.includes('/notifications/stream')) {
+        return Promise.resolve(
+          new Response(sse.stream, {
+            status: 200,
+            headers: { 'Content-Type': 'text/event-stream' },
+          }),
+        )
+      }
+      if (url.includes('/notifications')) {
+        inboxCallCount++
+        const notifications =
+          inboxCallCount === 1
+            ? [
+                createNotification({ id: 101, itemTitle: 'Task Retained' }),
+                createNotification({ id: 102, itemTitle: 'Task Removed ElseWhere' }),
+              ]
+            : [createNotification({ id: 101, itemTitle: 'Task Retained' })]
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              notifications,
+              nextCursor: null,
+            }),
+            {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            },
+          ),
+        )
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }))
+    })
+
+    function InboxConsumer({ userId }: { userId: number }) {
+      const { data } = useInfiniteNotifications(userId)
+      const items = data?.pages.flatMap((p) => p.notifications) ?? []
+      return (
+        <div>
+          {items.map((item) => (
+            <div key={item.id} data-testid={`inbox-row-${item.id}`}>
+              {item.itemTitle}
+            </div>
+          ))}
+        </div>
+      )
+    }
+
+    const queryClient = createTestQueryClient()
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AuthContext.Provider value={makeAuthValue(mockUserOne)}>
+          <MemoryRouter>
+            <NotificationLiveProvider>
+              <InboxConsumer userId={1} />
+            </NotificationLiveProvider>
+          </MemoryRouter>
+        </AuthContext.Provider>
+      </QueryClientProvider>,
+    )
+
+    await act(async () => {
+      sse.emitEvent('snapshot', { notifications: [], unreadCount: 2 })
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('inbox-row-101')).toBeInTheDocument()
+      expect(screen.getByTestId('inbox-row-102')).toBeInTheDocument()
+    })
+
+    await act(async () => {
+      sse.emitEvent('summary', { unreadCount: 1 })
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('inbox-row-101')).toBeInTheDocument()
+      expect(screen.queryByTestId('inbox-row-102')).toBeNull()
+    })
+  })
+
+  it('combines hover and focus transitions so mouseleave does not resume while keyboard focus stays inside', async () => {
+    vi.useFakeTimers()
+    const sse = createMockSSEStream()
+
+    globalThis.fetch = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      if (url.includes('/notifications/stream')) {
+        return Promise.resolve(
+          new Response(sse.stream, {
+            status: 200,
+            headers: { 'Content-Type': 'text/event-stream' },
+          }),
+        )
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }))
+    })
+
+    const queryClient = createTestQueryClient()
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AuthContext.Provider value={makeAuthValue(mockUserOne)}>
+          <MemoryRouter>
+            <NotificationLiveProvider>
+              <button data-testid="outside-element">Outside</button>
+            </NotificationLiveProvider>
+          </MemoryRouter>
+        </AuthContext.Provider>
+      </QueryClientProvider>,
+    )
+
+    await act(async () => {
+      sse.emitEvent('snapshot', { notifications: [], unreadCount: 0 })
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    await act(async () => {
+      sse.emitEvent('notifications', {
+        notifications: [createNotification({ id: 70, itemTitle: 'Dual Focus Hover Test' })],
+        unreadCount: 1,
+      })
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    const toast = screen.getByTestId('notification-toast-70')
+    const dismissBtn = screen.getByRole('button', { name: 'Dismiss notification' })
+    const outsideBtn = screen.getByTestId('outside-element')
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000)
+    })
+    expect(screen.getByTestId('notification-toast-70')).toBeInTheDocument()
+
+    await act(async () => {
+      fireEvent.focus(dismissBtn)
+    })
+
+    await act(async () => {
+      fireEvent.mouseEnter(toast)
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6000)
+    })
+    expect(screen.getByTestId('notification-toast-70')).toBeInTheDocument()
+
+    await act(async () => {
+      fireEvent.mouseLeave(toast)
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4000)
+    })
+    expect(screen.getByTestId('notification-toast-70')).toBeInTheDocument()
+
+    await act(async () => {
+      fireEvent.blur(toast, { relatedTarget: outsideBtn })
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4000)
+    })
+    expect(screen.getByTestId('notification-toast-70')).toBeInTheDocument()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500)
+    })
+    expect(screen.queryByTestId('notification-toast-70')).toBeNull()
+  })
+
+  it('sorts batch notifications ascending by ID before enqueue for FIFO display', async () => {
+    const sse = createMockSSEStream()
+
+    globalThis.fetch = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      if (url.includes('/notifications/stream')) {
+        return Promise.resolve(
+          new Response(sse.stream, {
+            status: 200,
+            headers: { 'Content-Type': 'text/event-stream' },
+          }),
+        )
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }))
+    })
+
+    const queryClient = createTestQueryClient()
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AuthContext.Provider value={makeAuthValue(mockUserOne)}>
+          <MemoryRouter>
+            <NotificationLiveProvider>
+              <div>Dashboard Content</div>
+            </NotificationLiveProvider>
+          </MemoryRouter>
+        </AuthContext.Provider>
+      </QueryClientProvider>,
+    )
+
+    await act(async () => {
+      sse.emitEvent('snapshot', { notifications: [], unreadCount: 0 })
+    })
+
+    const n82 = createNotification({ id: 82, itemTitle: 'Task 82' })
+    const n81 = createNotification({ id: 81, itemTitle: 'Task 81' })
+
+    await act(async () => {
+      sse.emitEvent('notifications', {
+        notifications: [n82, n81],
+        unreadCount: 2,
+      })
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('notification-toast-81')).toBeInTheDocument()
+      expect(screen.getByTestId('notification-toast-82')).toBeInTheDocument()
+    })
+
+    const container = screen.getByTestId('notification-toasts-container')
+    const toasts = container.querySelectorAll('[data-testid^="notification-toast-"]')
+    expect(toasts[0]).toHaveAttribute('data-testid', 'notification-toast-81')
+    expect(toasts[1]).toHaveAttribute('data-testid', 'notification-toast-82')
+  })
+
+  it('prevents pending chunks after account switch from rendering or polluting prior account', async () => {
+    const sseUser1 = createMockSSEStream()
+    const sseUser2 = createMockSSEStream()
+    let fetchCalls = 0
+
+    globalThis.fetch = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      if (url.includes('/notifications/stream')) {
+        fetchCalls++
+        if (fetchCalls === 1) {
+          return Promise.resolve(
+            new Response(sseUser1.stream, {
+              status: 200,
+              headers: { 'Content-Type': 'text/event-stream' },
+            }),
+          )
+        }
+        return Promise.resolve(
+          new Response(sseUser2.stream, {
+            status: 200,
+            headers: { 'Content-Type': 'text/event-stream' },
+          }),
+        )
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }))
+    })
+
+    const queryClient = createTestQueryClient()
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <AuthContext.Provider value={makeAuthValue(mockUserOne)}>
+          <MemoryRouter>
+            <NotificationLiveProvider>
+              <div>Dashboard Content</div>
+            </NotificationLiveProvider>
+          </MemoryRouter>
+        </AuthContext.Provider>
+      </QueryClientProvider>,
+    )
+
+    await act(async () => {
+      sseUser1.emitEvent('snapshot', { notifications: [], unreadCount: 0 })
+    })
+
+    const mockUserTwo: User = {
+      id: 2,
+      email: 'user2@example.com',
+      displayName: 'User Two',
+      isAdmin: false,
+    }
+
+    await act(async () => {
+      // Resolve the pending read, then switch accounts before its continuation runs.
+      sseUser1.emitEvent('notifications', {
+        notifications: [createNotification({ id: 999, itemTitle: 'Secret User 1 Item' })],
+        unreadCount: 1,
+      })
+      rerender(
+        <QueryClientProvider client={queryClient}>
+          <AuthContext.Provider value={makeAuthValue(mockUserTwo)}>
+            <MemoryRouter>
+              <NotificationLiveProvider>
+                <div>Dashboard Content</div>
+              </NotificationLiveProvider>
+            </MemoryRouter>
+          </AuthContext.Provider>
+        </QueryClientProvider>,
+      )
+    })
+
+    expect(screen.queryByTestId('notification-toast-999')).toBeNull()
+    expect(screen.queryByText('Secret User 1 Item')).toBeNull()
+
+  })
+
+  it('does not dispatch incomplete non-blank-line terminated frame on connection close', async () => {
+    const sse = createMockSSEStream()
+
+    globalThis.fetch = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      if (url.includes('/notifications/stream')) {
+        return Promise.resolve(
+          new Response(sse.stream, {
+            status: 200,
+            headers: { 'Content-Type': 'text/event-stream' },
+          }),
+        )
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }))
+    })
+
+    const queryClient = createTestQueryClient()
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AuthContext.Provider value={makeAuthValue(mockUserOne)}>
+          <MemoryRouter>
+            <NotificationLiveProvider>
+              <div>Dashboard Content</div>
+            </NotificationLiveProvider>
+          </MemoryRouter>
+        </AuthContext.Provider>
+      </QueryClientProvider>,
+    )
+
+    await act(async () => {
+      sse.emitEvent('snapshot', { notifications: [], unreadCount: 0 })
+    })
+
+    await act(async () => {
+      sse.emitRaw('event: notifications\ndata: {"notifications":[{"id":888,"itemTitle":"Truncated"}]}')
+      sse.close()
+    })
+
+    expect(screen.queryByTestId('notification-toast-888')).toBeNull()
+    expect(screen.queryByText('Truncated')).toBeNull()
+  })
+
+  it('validates Content-Type and only resets backoff on valid event receipt', async () => {
+    vi.useFakeTimers()
+    let fetchCount = 0
+
+    const mockStream1 = createMockSSEStream()
+    const mockStream2 = createMockSSEStream()
+
+    globalThis.fetch = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      fetchCount++
+      if (fetchCount === 1) {
+        return Promise.resolve(
+          new Response('<html><body>Login</body></html>', {
+            status: 200,
+            headers: { 'Content-Type': 'text/html' },
+          }),
+        )
+      }
+      if (fetchCount === 2) {
+        mockStream1.close()
+        return Promise.resolve(
+          new Response(mockStream1.stream, {
+            status: 200,
+            headers: { 'Content-Type': 'text/event-stream' },
+          }),
+        )
+      }
+      return Promise.resolve(
+        new Response(mockStream2.stream, {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        }),
+      )
+    })
+
+    const onSnapshot = vi.fn()
+    const onError = vi.fn()
+    const abortController = new AbortController()
+
+    const cleanup = connectNotificationStream({
+      signal: abortController.signal,
+      onSnapshot,
+      onNotifications: vi.fn(),
+      onSummary: vi.fn(),
+      onError,
+      initialBackoffMs: 1000,
+      maxBackoffMs: 10000,
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(onError).toHaveBeenCalled()
+    expect(fetchCount).toBe(1)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(999)
+    })
+    expect(fetchCount).toBe(1)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+    expect(fetchCount).toBe(2)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1999)
+    })
+    expect(fetchCount).toBe(2)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+    expect(fetchCount).toBe(3)
+
+    await act(async () => {
+      mockStream2.emitEvent('snapshot', { notifications: [], unreadCount: 0 })
+      await vi.advanceTimersByTimeAsync(10)
+    })
+    expect(onSnapshot).toHaveBeenCalled()
+
+    cleanup()
+    abortController.abort()
   })
 })

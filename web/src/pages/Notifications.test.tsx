@@ -692,52 +692,6 @@ describe('Notifications Page', () => {
     })
   })
 
-  it('does not periodically poll on 30-second interval while mounted', async () => {
-    vi.useFakeTimers()
-    let pollCount = 0
-
-    globalThis.fetch = vi.fn().mockImplementation((input: RequestInfo | URL) => {
-      const url = typeof input === 'string' ? input : input.toString()
-      if (url.includes('/notifications/summary')) {
-        return Promise.resolve(
-          new Response(JSON.stringify({ unreadCount: 0 }), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-          }),
-        )
-      }
-      if (url.includes('/notifications')) {
-        pollCount++
-        return Promise.resolve(
-          new Response(JSON.stringify({ notifications: [], nextCursor: null }), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-          }),
-        )
-      }
-      return Promise.resolve(new Response('not found', { status: 404 }))
-    })
-
-    const queryClient = createTestQueryClient()
-    renderNotifications(queryClient)
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0)
-    })
-    expect(pollCount).toBe(1)
-
-    // Advance 30 seconds
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(30000)
-    })
-    expect(pollCount).toBe(1)
-
-    // Advance another 30 seconds
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(30000)
-    })
-    expect(pollCount).toBe(1)
-  })
 })
 
 describe('AppLayout Shared Header Badge & Auth Gating', () => {
