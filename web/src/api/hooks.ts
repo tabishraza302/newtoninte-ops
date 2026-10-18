@@ -9,7 +9,10 @@ import { apiFetch } from './client'
 import type {
   ActivityEvent,
   CreateItemInput,
+  JobView,
+  JobsSummary,
   ListItemsQuery,
+  ListJobsQuery,
   MeResponse,
   PatchItemInput,
   Status,
@@ -238,6 +241,49 @@ export function useTransitionItem(): UseMutationResult<
       void queryClient.invalidateQueries({ queryKey: ['item', id] })
       void queryClient.invalidateQueries({ queryKey: ['item-activity', id] })
       void queryClient.invalidateQueries({ queryKey: ['items'] })
+    },
+  })
+}
+
+// --- Ops: outbox jobs (§12.2, admin only) ---
+
+export interface JobsResponse {
+  jobs: JobView[]
+  nextCursor: string | null
+}
+
+export function buildJobsQueryString(query: ListJobsQuery = {}): string {
+  const params = new URLSearchParams()
+  if (query.status) params.set('status', query.status)
+  if (query.type) params.set('type', query.type)
+  if (query.cursor) params.set('cursor', query.cursor)
+  if (query.limit !== undefined) params.set('limit', String(query.limit))
+  const qs = params.toString()
+  return qs ? `/admin/jobs?${qs}` : '/admin/jobs'
+}
+
+export function useJobs(query: ListJobsQuery = {}): UseQueryResult<JobsResponse, Error> {
+  const path = buildJobsQueryString(query)
+  return useQuery<JobsResponse, Error>({
+    queryKey: ['jobs', query],
+    queryFn: () => apiFetch<JobsResponse>(path),
+  })
+}
+
+export function useJobsSummary(): UseQueryResult<JobsSummary, Error> {
+  return useQuery<JobsSummary, Error>({
+    queryKey: ['jobs-summary'],
+    queryFn: () => apiFetch<JobsSummary>('/admin/jobs/summary'),
+  })
+}
+
+export function useRetryJob(): UseMutationResult<void, Error, { id: number }> {
+  const queryClient = useQueryClient()
+  return useMutation<void, Error, { id: number }>({
+    mutationFn: ({ id }) => apiFetch<void>(`/admin/jobs/${id}/retry`, { method: 'POST' }),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['jobs'] })
+      void queryClient.invalidateQueries({ queryKey: ['jobs-summary'] })
     },
   })
 }

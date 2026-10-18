@@ -8,6 +8,7 @@ import { Dashboard } from './pages/Dashboard'
 import { ItemList } from './pages/ItemList'
 import { ItemDetail } from './pages/ItemDetail'
 import { ItemCreate } from './pages/ItemCreate'
+import { OutboxJobs } from './pages/OutboxJobs'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -35,6 +36,9 @@ export function DashboardOrHome(): React.ReactElement {
       <nav style={{ margin: '1.5rem 0', display: 'flex', gap: '1rem' }}>
         <Link to="/dashboard" style={{ color: '#2563eb' }}>Dashboard</Link>
         <Link to="/items" style={{ color: '#2563eb' }}>Items</Link>
+        {user.isAdmin && (
+          <Link to="/admin/jobs" style={{ color: '#2563eb' }}>Outbox Jobs</Link>
+        )}
       </nav>
       <button type="button" onClick={() => void logout()}>
         Log Out
@@ -52,6 +56,7 @@ export function AppRoutes(): React.ReactElement {
       <Route path="/items" element={<ItemList />} />
       <Route path="/items/new" element={<ItemCreate />} />
       <Route path="/items/:id" element={<ItemDetail />} />
+      <Route path="/admin/jobs" element={<OutboxJobs />} />
       <Route path="/" element={<DashboardOrHome />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
