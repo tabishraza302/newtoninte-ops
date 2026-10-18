@@ -8,25 +8,34 @@ is either readable in the cited code, or was observed directly on this build.
 ## Correctness and delivery
 
 - **Email delivery is at-least-once, not exactly-once.** The worker runs a job's handler and
-  only then flips the row to `done` (`api/src/outbox/worker.ts:95-111`). A handler that
+  only then flips the row to `done` (`api/src/outbox/worker.ts:197-208`). A handler that
   throws — including an SMTP send the server accepted but whose reply the client never read —
   increments `attempts` and returns the job to `pending` with backoff, so it is sent again
-  (`api/src/outbox/worker.ts:112-142`; `max_attempts` default 5 at `api/src/db/schema.ts:255`).
+  (the one failure transition, `api/src/outbox/worker.ts:209-216` calling
+  `api/src/outbox/worker.ts:43-71`; `max_attempts` default 5 at `api/src/db/schema.ts:255`).
   `dedupe_key` de-duplicates the *enqueue*, never the send
   (`api/src/services/outbox.ts:39`, `api/src/db/schema.ts:260`). A crash between the claim and
-  the `done` update is the opposite failure and just as real: the row stays `processing` and
-  is never re-claimed (the claim selects `pending` only, `api/src/outbox/worker.ts:48-56`;
-  `locked_at` is written at `api/src/outbox/worker.ts:63-70` and nothing sweeps it), so that
-  message is lost silently and never shows up as `failed`. *Removed by:* a provider-side
-  idempotency token on send, or a lease with a `locked_at` sweep plus a per-attempt audit.
+  the `done` update is the opposite failure and just as real, but it is no longer a silent
+  loss: step 0 of every pass reclaims rows whose `status='processing'` and whose `locked_at` is
+  older than `WORKER_LEASE_SEC` (default 300 s) and drives them through that same failure
+  transition, so the message becomes deliverable again
+  (`api/src/outbox/worker.ts:113-138`; `api/src/config.ts:14`; `.env.example:17`). The residual
+  risk is the double send the re-delivery creates — a handler that legitimately outlives the
+  lease runs twice (`api/src/outbox/worker.ts:99-103`), which only a provider-side idempotency
+  token would close. A reclaimed row is also a partly mute witness: the sweep writes
+  `last_error` only when the row has none, so a row whose handler had already reported a
+  failure keeps *that* message rather than "the lease expired"
+  (`api/src/outbox/worker.ts:132-137`). *Removed by:* a provider-side idempotency token on
+  send, or a per-attempt audit instead of one `last_error` column.
 
 - **The worker polls; it is never woken.** `startWorker` is a `setTimeout` loop
-  (`api/src/outbox/worker.ts:150-182`) that claims a batch every `WORKER_INTERVAL_MS`
+  (`api/src/outbox/worker.ts:226-268`) that claims a batch every `WORKER_INTERVAL_MS`
   (default 3000 ms — `api/src/config.ts:12`, `.env.example:15`) with
-  `FOR UPDATE SKIP LOCKED` (`api/src/outbox/worker.ts:44-73`). MySQL has no `LISTEN/NOTIFY`.
+  `FOR UPDATE SKIP LOCKED` (`api/src/outbox/worker.ts:141-170`). MySQL has no `LISTEN/NOTIFY`.
   *Consequence:* invite/reset/assignment mail is late by up to one interval plus the job's
-  backoff, and every idle tick costs a query against `outbox_jobs`. *Removed by:* a broker, or
-  a database-native wake mechanism.
+  backoff, and every idle tick costs a lease sweep plus a claim query against `outbox_jobs`
+  (`api/src/outbox/worker.ts:113-138`, `api/src/outbox/worker.ts:141-153`). *Removed by:* a broker,
+  or a database-native wake mechanism.
 
 - **Deadlocks are retried, not eliminated.** MySQL's default `REPEATABLE READ` takes gap locks
   under concurrent writes.
@@ -97,37 +106,47 @@ is either readable in the cited code, or was observed directly on this build.
   input past 72 bytes. Switching algorithms requires password migration, such as rehashing
   on the next successful login.
 
-- **One database, one worker process — and nothing in the delivered stack starts the worker.**
-  Compose defines exactly one `mysql` and one `api`
-  (`docker-compose.yml:17-56`): no read replicas, no partitioning, no broker. The worker is a separate
-  process (`api/src/worker-main.ts:1-4`, `api/package.json:8`), and the stack never launches
-  it: the compose `api` command is `bun run db:migrate && bun run seed && bun run start`
-  (`docker-compose.yml:41-46`), that start script serves HTTP only (`api/src/index.ts:1-8`),
-  and root `bun run dev` runs api + web only (`package.json:6`). *Consequence:* database
-  throughput and the single worker are the whole system's throughput with no failover, and
-  until someone runs `bun --cwd api worker` by hand, outbox jobs sit `pending` and no mail is
-  sent. *Removed by:* a dedicated worker service in compose (and replicas plus a broker when
-  the load demands it).
+- **One database, one worker process — and the delivered stack runs exactly one worker.** Compose
+  defines one `mysql`, one `api` and one `worker`, the last two off the same image
+  (`docker-compose.yml:17-116`): no read replicas, no partitioning, no broker, no second worker. The worker is a separate
+  process (`api/src/worker-main.ts:1-4`, `api/package.json:8`) and the stack now does launch it: the
+  `worker` service runs `bun run worker` after `mysql` is healthy and `api` is healthy — that is,
+  after the migrations and seed — while the `api` command stays
+  `bun run db:migrate && bun run seed && bun run start` and that start script serves HTTP only
+  (`docker-compose.yml:82-104`, `docker-compose.yml:47-49`, `api/src/index.ts:1-8`), and root
+  `bun run dev` starts api, web and worker together (`package.json:6`). *Consequence:* database
+  throughput and that single worker process are the whole system's throughput, and nothing else
+  drains `outbox_jobs` — one poller for every team's mail, with no failover and no replica, so a
+  stopped `worker` stalls all invitation, password-reset and assignment mail while the ops screen
+  reports the rows `pending`. *Removed by:* worker replicas (the claim is
+  `FOR UPDATE SKIP LOCKED`, so a second worker is safe) plus a broker when the load demands it.
 
 - **The `resend` mail driver has never run.** `buildTransport` branches on `MAIL_DRIVER`
   (`api/src/outbox/mailer.ts:39-49`), but everything exercised is the `mailpit` branch: the
   suite points SMTP at the local sink (`api/vitest.config.ts:22-25`) and the real-SMTP test
   asserts against Mailpit's HTTP API (`api/tests/outbox/mailer.test.ts:7`,
   `api/tests/outbox/mailer.test.ts:92-96`), while the config tests cover only the default and
-  an unknown value (`api/tests/config.test.ts:14`, `api/tests/config.test.ts:16-18`). No API
+  an unknown value (`api/tests/config.test.ts:15`, `api/tests/config.test.ts:17-18`). No API
   key was available, so Resend's endpoint and credential parsing
   (`api/src/outbox/mailer.ts:31-37`, `api/src/outbox/mailer.ts:40-46`) are unproven. *Removed
   by:* a Resend key in CI, or another real SMTP capture that drives the same code path.
 
-- **Dev/test runs MySQL 8.0 natively, while the compose images and the single-origin proxy are
-  unexercised.** The stack pins `mysql:8.0` (`docker-compose.yml:19`) and expects `api` and
-  `web` images to migrate, seed and start inside themselves (`docker-compose.yml:40-46`), but
-  the development and test loop runs the api as a plain Bun process against MySQL 8.0 at
-  `127.0.0.1:3306` (`api/vitest.config.ts:15-17`; the server reported `8.0.46` for
-  `SELECT VERSION()`). The engine matches, so this is not a MariaDB-versus-MySQL divergence —
-  the gap is that the image builds, the compose `db:migrate && seed && start` command and the
-  nginx single-origin proxy are not covered by `bun run test`. *Removed by:* running the
-  compose smoke, and doing it in CI.
+- **The compose path is exercised by hand, not by `bun run test`.** The stack pins `mysql:8.0`
+  (`docker-compose.yml:19`) and expects the `api` image to migrate, seed and start inside itself
+  (`docker-compose.yml:47-49`), while the development and test loop runs the api as a plain Bun
+  process against the database `TEST_DATABASE_URL` names, defaulting to `127.0.0.1:3306`
+  (`api/vitest.config.ts:15-17`). Both answered `8.0.46` for `SELECT VERSION()`, so this is not a
+  MariaDB-versus-MySQL divergence: the engine is the pinned MySQL 8 on either path. What was
+  verified by hand on this build: `docker compose up -d --build --wait` brings up `mysql`,
+  `mailpit`, `api` (healthy), `worker` and `web`; the nginx single-origin proxy serves the built
+  SPA on `:8080` and proxies `/health` → `{"status":"ok"}` and `/ready` → `{"status":"ready"}`; an
+  invited address gets its mail in Mailpit within seconds, carrying
+  `http://localhost:8080/redeem?code=…`; redeeming that code returns a session, a replay with the
+  same password returns `409` (the membership check fires before another use is spent), and a replay
+  with no password for the account it just created returns `403`. What is still not covered: no test
+  asserts any of it, so the image builds, the compose `db:migrate && seed && start` command and the
+  proxy are only as good as the last manual run. *Removed by:* running that smoke in CI, where it re-runs on
+  every push.
 
 - **There is no CI pipeline.** The repository contains no CI configuration at all — no
   `.github/workflows`, no equivalent — and the root scripts are local-only

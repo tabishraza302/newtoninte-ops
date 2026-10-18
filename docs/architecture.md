@@ -32,8 +32,10 @@ flowchart LR
 ```
 
 Everything stateful lives in MySQL. The API container is **stateless** — any number
-could run behind a load balancer. The worker is a clean seam inside the same container
-for dev, movable to its own container in prod with no code change.
+could run behind a load balancer. The worker is a separate entry point
+(`api/src/worker-main.ts`) over the same image and the same database: its own
+process in local dev, its own container in `docker-compose.yml`, and independently
+scalable or replicable without a code change.
 
 ---
 

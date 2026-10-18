@@ -139,12 +139,15 @@ roll back together; `dedupe_key` is unique and a repeat enqueue is an explicit n
 (api/src/services/outbox.ts:26-39; api/src/db/schema.ts:260). The worker claims a batch with
 `status='pending' AND available_at <= NOW(3)`, `ORDER BY id LIMIT n`, `FOR UPDATE SKIP LOCKED`, marks
 it `processing` with `locked_by`, and runs handlers *outside* the lock
-(api/src/outbox/worker.ts:44-73); success nulls the payload and marks `done`, failure increments
+(api/src/outbox/worker.ts:141-170); success nulls the payload and marks `done`, failure increments
 `attempts` and schedules exponential backoff `min(2^attempts · 5s, 300s)` with `last_error`, or
 parks the row as `failed` at `max_attempts` (default 5) so a broken job stays visible instead of
-disappearing (api/src/outbox/worker.ts:18-21, 100-143; api/src/db/schema.ts:251-255). Cadence and
-batch size are configuration, defaulting to a 3000 ms poll of 10 jobs
-(api/src/outbox/worker.ts:158, 163-178; .env.example:15-16). Handlers are the three real email types
+disappearing (api/src/outbox/worker.ts:43-71, 209-216; api/src/db/schema.ts:251-255) — the one
+transition a handler failure and an expired lease share, so a row whose worker died mid-handler is
+re-delivered once `WORKER_LEASE_SEC` (default 300 s) has passed rather than stranded in
+`processing` (api/src/outbox/worker.ts:113-138). Cadence and batch size are configuration,
+defaulting to a 3000 ms poll of 10 jobs
+(api/src/outbox/worker.ts:231, 226-268; .env.example:15-16). Handlers are the three real email types
 over real SMTP (api/src/outbox/handlers.ts:123-139). The dividing line is stated in one sentence in
 the architecture doc: anything that must be consistent with the item is synchronous; anything that
 is a side effect which can fail and retry is a job (docs/architecture.md:415-416).
@@ -226,5 +229,5 @@ decision 3, taken knowingly for immediacy over per-request cost.
   teams' items (api/src/policy/index.ts:62-67).
 - **A Kanban board.** Deferred, along with Elasticsearch.
 - **Silent job drops, soft deletes, or replicated topology.** A job that exhausts `max_attempts`
-  becomes a visible `failed` row with `last_error` (api/src/outbox/worker.ts:120-129); there is one
+  becomes a visible `failed` row with `last_error` (api/src/outbox/worker.ts:56-60); there is one
   database and one worker process, with no partitioning or read replicas.
