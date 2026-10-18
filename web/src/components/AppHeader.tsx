@@ -71,7 +71,7 @@ export function AppHeader(): React.ReactElement {
               N
             </div>
             <span style={{ fontWeight: 700, fontSize: '1rem', letterSpacing: '-0.02em' }}>
-              Newtonite <span style={{ color: '#94a3b8', fontWeight: 500 }}>Ops</span>
+              Newtonite Operations
             </span>
           </Link>
 
