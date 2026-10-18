@@ -38,6 +38,15 @@ describe('auth routes', () => {
       expect(refreshCookie).toContain('Path=/auth')
       expect(refreshCookie?.toLowerCase()).toContain('httponly')
     })
+
+    it('rejects password exceeding 72 bytes with 422 VALIDATION_ERROR', async () => {
+      const res = await request(createApp())
+        .post('/auth/login')
+        .send({ email: 'login-test@example.com', password: 'a'.repeat(73) })
+
+      expect(res.status).toBe(422)
+      expect(res.body.error.code).toBe('VALIDATION_ERROR')
+    })
   })
 
   describe('POST /auth/refresh', () => {
@@ -71,6 +80,21 @@ describe('auth routes', () => {
       const nextRefreshCookie = cookieArray.find((c: string) => c.startsWith('refresh_token='))
       expect(nextRefreshCookie).toBeDefined()
       expect(nextRefreshCookie).toContain('Path=/auth')
+    })
+
+    it('clears cookie and returns 401 when presented with an invalid token', async () => {
+      const app = createApp()
+      const refreshRes = await request(app)
+        .post('/auth/refresh')
+        .set('Cookie', ['refresh_token=invalid-garbage-token'])
+
+      expect(refreshRes.status).toBe(401)
+      const cookies = refreshRes.headers['set-cookie']
+      expect(cookies).toBeDefined()
+      const cookieArray = Array.isArray(cookies) ? cookies : [cookies]
+      const clearedCookie = cookieArray.find((c: string) => c.startsWith('refresh_token='))
+      expect(clearedCookie).toBeDefined()
+      expect(clearedCookie).toMatch(/Expires=|Max-Age=0/i)
     })
   })
 
@@ -167,6 +191,16 @@ describe('auth routes', () => {
 
       expect(loginRes.status).toBe(200)
       expect(loginRes.body.user.id).toBe(user.id)
+    })
+
+    it('rejects password exceeding 72 bytes with 422 VALIDATION_ERROR', async () => {
+      const app = createApp()
+      const res = await request(app)
+        .post('/auth/password/reset')
+        .send({ token: 'dummy-token', password: 'a'.repeat(73) })
+
+      expect(res.status).toBe(422)
+      expect(res.body.error.code).toBe('VALIDATION_ERROR')
     })
   })
 

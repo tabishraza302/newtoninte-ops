@@ -258,6 +258,43 @@ describe('items service - listItems & getItem (Task 3.1)', () => {
     expect(await errorCode(() => listItems(actor, { cursor: 'not-base64-json' }))).toBe('VALIDATION_ERROR')
   })
 
+  it('user with no teams still validates query parameters and throws VALIDATION_ERROR or NOT_FOUND', async () => {
+    const user = await seedUser()
+    const actor: Actor = { id: user.id, isAdmin: false }
+
+    // Invalid limit throws VALIDATION_ERROR
+    expect(await errorCode(() => listItems(actor, { limit: 0 }))).toBe('VALIDATION_ERROR')
+    expect(await errorCode(() => listItems(actor, { limit: 500 }))).toBe('VALIDATION_ERROR')
+
+    // q exceeding 100 characters throws VALIDATION_ERROR
+    expect(await errorCode(() => listItems(actor, { q: 'a'.repeat(101) }))).toBe('VALIDATION_ERROR')
+
+    // Malformed cursor throws VALIDATION_ERROR
+    expect(await errorCode(() => listItems(actor, { cursor: 'bad-cursor' }))).toBe('VALIDATION_ERROR')
+
+    // Foreign team requested throws NOT_FOUND
+    expect(await errorCode(() => listItems(actor, { team: 9999 }))).toBe('NOT_FOUND')
+  })
+
+  it('view=awaiting_my_approval with no lead teams still validates cursor before returning empty', async () => {
+    const user = await seedUser()
+    const team = await seedTeam()
+    // user is only a member, not a lead
+    await seedMembership(user.id, team.id, 'member')
+    const actor: Actor = { id: user.id, isAdmin: false }
+
+    // Malformed cursor throws VALIDATION_ERROR even though leadTeamIds is empty
+    expect(
+      await errorCode(() =>
+        listItems(actor, { view: 'awaiting_my_approval', cursor: 'malformed-cursor' }),
+      ),
+    ).toBe('VALIDATION_ERROR')
+
+    // Valid query with no lead teams returns empty list
+    const res = await listItems(actor, { view: 'awaiting_my_approval' })
+    expect(res.items).toEqual([])
+    expect(res.nextCursor).toBeNull()
+  })
   it('getItem: returns item with creator and assignee info', async () => {
     const creator = await seedUser({ displayName: 'Creator User', email: 'creator@example.test' })
     const assignee = await seedUser({ displayName: 'Assignee User', email: 'assignee@example.test' })

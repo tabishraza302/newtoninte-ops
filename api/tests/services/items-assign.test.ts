@@ -49,7 +49,6 @@ describe('items service - assignItem (Task 4.6)', () => {
     const jobs = await db.select().from(outboxJobs)
     expect(jobs).toHaveLength(1)
     expect(jobs[0]?.type).toBe('email.assigned')
-    expect(jobs[0]?.dedupeKey).toBe(`assigned:item:${item.id}`)
     expect(jobs[0]?.payload).toEqual({
       to: member.email,
       itemTitle: 'Inspect thruster valve',
@@ -58,10 +57,10 @@ describe('items service - assignItem (Task 4.6)', () => {
     })
   })
 
-  it('assigning again with right version does not duplicate outbox email (dedupe_key)', async () => {
+  it('assigning B then C enqueues separate correct email payloads; duplicate/noop does not enqueue false event or job', async () => {
     const lead = await seedUser()
-    const member1 = await seedUser()
-    const member2 = await seedUser()
+    const member1 = await seedUser({ displayName: 'Member One', email: 'm1@example.test' })
+    const member2 = await seedUser({ displayName: 'Member Two', email: 'm2@example.test' })
     const team = await seedTeam({ name: 'Flight Ops' })
     await seedMembership(lead.id, team.id, 'lead')
     await seedMembership(member1.id, team.id, 'member')
@@ -70,19 +69,65 @@ describe('items service - assignItem (Task 4.6)', () => {
     const item = await seedItem(team.id, {
       createdBy: lead.id,
       version: 1,
+      title: 'Inspect thruster valve',
     })
 
     const actor: Actor = { id: lead.id, isAdmin: false }
-    await assignItem(actor, item.id, member1.id, 1)
-    await assignItem(actor, item.id, member2.id, 2)
 
-    // Dedupe key is assigned:item:<id> so duplicate job is ignored
-    const jobs = await db
+    // First assignment to member1
+    const res1 = await assignItem(actor, item.id, member1.id, 1)
+    expect(res1.assigneeId).toBe(member1.id)
+    expect(res1.version).toBe(2)
+
+    // Stale no-op assignment to same member with old version (1) still throws 409 STALE_STATE
+    let caughtStaleNoop: unknown
+    try {
+      await assignItem(actor, item.id, member1.id, 1)
+    } catch (e) {
+      caughtStaleNoop = e
+    }
+    expect(caughtStaleNoop).toBeInstanceOf(ApiError)
+    expect((caughtStaleNoop as ApiError).code).toBe('STALE_STATE')
+    expect((caughtStaleNoop as ApiError).status).toBe(409)
+
+    // Fresh no-op assignment to same member with current version (2) leaves state, history, and jobs unchanged
+    const resNoop = await assignItem(actor, item.id, member1.id, 2)
+    expect(resNoop.assigneeId).toBe(member1.id)
+    expect(resNoop.version).toBe(2)
+
+    const eventsAfterNoop = await db
       .select()
-      .from(outboxJobs)
-      .where(eq(outboxJobs.dedupeKey, `assigned:item:${item.id}`))
+      .from(activityEvents)
+      .where(eq(activityEvents.workItemId, item.id))
+    expect(eventsAfterNoop).toHaveLength(1) // Only original assignment event
 
-    expect(jobs).toHaveLength(1)
+    const jobsAfterNoop = await db.select().from(outboxJobs)
+    expect(jobsAfterNoop).toHaveLength(1) // Only original email job
+
+    // Second assignment to member2 (version 2) enqueues separate notification with member2 payload
+    const res2 = await assignItem(actor, item.id, member2.id, 2)
+    expect(res2.assigneeId).toBe(member2.id)
+    expect(res2.version).toBe(3)
+
+    const allEvents = await db
+      .select()
+      .from(activityEvents)
+      .where(eq(activityEvents.workItemId, item.id))
+    expect(allEvents).toHaveLength(2)
+    expect(allEvents[1]?.fromValue).toBe(String(member1.id))
+    expect(allEvents[1]?.toValue).toBe(String(member2.id))
+
+    const allJobs = await db.select().from(outboxJobs)
+    expect(allJobs).toHaveLength(2)
+    const recipientEmails = allJobs.map((j) => {
+      const payload = j.payload
+      if (payload && typeof payload === 'object' && 'to' in payload && typeof payload.to === 'string') {
+        return payload.to
+      }
+      return null
+    })
+    expect(recipientEmails).toContain(member1.email)
+    expect(recipientEmails).toContain(member2.email)
   })
 
   it('lead assigning themselves does not enqueue email.assigned', async () => {
@@ -259,4 +304,5 @@ describe('items service - assignItem (Task 4.6)', () => {
     expect(caughtError).toBeInstanceOf(ApiError)
     expect((caughtError as ApiError).code).toBe('NOT_FOUND')
   })
+
 })

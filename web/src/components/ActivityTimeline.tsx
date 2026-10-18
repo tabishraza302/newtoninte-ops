@@ -10,6 +10,13 @@ export interface ActivityTimelineProps {
 function formatEventDescription(event: ActivityEvent): string {
   switch (event.type) {
     case 'created':
+      if (
+        event.metadata &&
+        typeof event.metadata === 'object' &&
+        ('snapshot' in event.metadata || 'seeded' in event.metadata)
+      ) {
+        return 'Imported demo baseline'
+      }
       return 'Created this item'
     case 'status_changed':
       return `Status changed from ${event.fromValue ?? 'none'} to ${event.toValue ?? 'none'}`
@@ -35,13 +42,13 @@ function formatEventDescription(event: ActivityEvent): string {
 function getEventBadgeColor(type: string): { bg: string; text: string; border: string } {
   switch (type) {
     case 'created':
-      return { bg: '#ecfdf5', text: '#059669', border: '#a7f3d0' }
+      return { bg: '#ecfdf5', text: '#047857', border: '#a7f3d0' }
     case 'status_changed':
-      return { bg: '#eff6ff', text: '#2563eb', border: '#bfdbfe' }
+      return { bg: '#f0fdfa', text: '#0f766e', border: '#ccfbf1' }
     case 'priority_changed':
-      return { bg: '#fffbeb', text: '#b45309', border: '#fde68a' }
+      return { bg: '#fff7ed', text: '#c2410c', border: '#fed7aa' }
     case 'comment_added':
-      return { bg: '#f5f3ff', text: '#7c3aed', border: '#ddd6fe' }
+      return { bg: '#f3e8ff', text: '#6b21a8', border: '#ddd6fe' }
     default:
       return { bg: '#f1f5f9', text: '#475569', border: '#cbd5e1' }
   }
@@ -104,8 +111,13 @@ export function ActivityTimeline({
         ) {
           commentBody = event.metadata.body
         }
+        const isSeedBaseline =
+          event.type === 'created' &&
+          event.metadata &&
+          typeof event.metadata === 'object' &&
+          ('snapshot' in event.metadata || 'seeded' in event.metadata)
         const actorName =
-          event.actor?.displayName ?? (event.actorId ? `User #${event.actorId}` : 'System')
+          event.actor?.displayName ?? (isSeedBaseline ? 'System Baseline' : event.actorId ? `User #${event.actorId}` : 'System')
         const formattedDate = new Date(event.createdAt).toLocaleString()
         const badgeColors = getEventBadgeColor(event.type)
 
@@ -152,7 +164,7 @@ export function ActivityTimeline({
               </div>
               <time
                 dateTime={event.createdAt}
-                style={{ fontSize: '0.75rem', color: '#64748b' }}
+                style={{ fontSize: '0.75rem', color: '#64748b', fontVariantNumeric: 'tabular-nums' }}
               >
                 {formattedDate}
               </time>

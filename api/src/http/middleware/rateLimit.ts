@@ -9,13 +9,22 @@ interface RateLimitBucket {
 export function rateLimit(opts: { key: string; windowMs: number; max: number }): RequestHandler {
   const buckets = new Map<string, RateLimitBucket>()
 
+  function prune(now: number): void {
+    for (const [k, v] of buckets.entries()) {
+      if (now >= v.resetAt) {
+        buckets.delete(k)
+      }
+    }
+  }
+
   return (req, _res, next) => {
-    const forwarded = req.headers['x-forwarded-for']
-    const ip = typeof forwarded === 'string'
-      ? forwarded.split(',')[0]!.trim()
-      : (req.ip ?? req.socket.remoteAddress ?? 'unknown')
-    const identifier = `${ip}:${opts.key}`
     const now = Date.now()
+    if (buckets.size > 500) {
+      prune(now)
+    }
+
+    const ip = req.ip || req.socket.remoteAddress || 'unknown'
+    const identifier = `${ip}:${opts.key}`
 
     const current = buckets.get(identifier)
     if (!current || now >= current.resetAt) {

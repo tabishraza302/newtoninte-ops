@@ -13,6 +13,8 @@ const WORKER_INTERVAL_MS_DEFAULT = 3000
 const WORKER_BATCH_SIZE_DEFAULT = 10
 const WORKER_LEASE_SEC_DEFAULT = 300
 const PORT_DEFAULT = 3000
+const ADMIN_USER_CREATION_ENABLED_DEFAULT = true
+const TRUST_PROXY_DEFAULT = 'loopback, linklocal, uniquelocal'
 
 export interface Config {
   port: number
@@ -32,6 +34,8 @@ export interface Config {
   workerLeaseSec: number
   idempotencyTtlSec: number
   appBaseUrl: string
+  adminUserCreationEnabled: boolean
+  trustProxy: string
 }
 
 function requireString(env: Record<string, string | undefined>, name: string, errors: string[]): string {
@@ -97,13 +101,29 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
 
   const smtpUrl = env['SMTP_URL']?.trim() || SMTP_URL_DEFAULT
   const mailFrom = env['MAIL_FROM']?.trim() || MAIL_FROM_DEFAULT
-  const appBaseUrl = env['APP_BASE_URL']?.trim() || APP_BASE_URL_DEFAULT
+  const trustProxy = env['TRUST_PROXY']?.trim() || TRUST_PROXY_DEFAULT
+  const appBaseUrlRaw = (env['APP_BASE_URL']?.trim() || APP_BASE_URL_DEFAULT).replace(/\/+$/, '')
+  let appBaseUrl = appBaseUrlRaw
+  try {
+    const parsedUrl = new URL(appBaseUrlRaw)
+    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+      errors.push(`APP_BASE_URL must use http or https protocol, got: ${appBaseUrlRaw}`)
+    }
+  } catch {
+    errors.push(`APP_BASE_URL must be a valid absolute URL, got: ${appBaseUrlRaw}`)
+  }
   const inviteTtlDays = numberSetting(env, 'INVITE_TTL_DAYS', INVITE_TTL_DAYS_DEFAULT, errors)
   const resetTtlSec = numberSetting(env, 'RESET_TTL_SEC', RESET_TTL_SEC_DEFAULT, errors)
   const workerIntervalMs = numberSetting(env, 'WORKER_INTERVAL_MS', WORKER_INTERVAL_MS_DEFAULT, errors)
   const workerBatchSize = numberSetting(env, 'WORKER_BATCH_SIZE', WORKER_BATCH_SIZE_DEFAULT, errors)
   const workerLeaseSec = numberSetting(env, 'WORKER_LEASE_SEC', WORKER_LEASE_SEC_DEFAULT, errors)
   const idempotencyTtlSec = numberSetting(env, 'IDEMPOTENCY_TTL_SEC', IDEMPOTENCY_TTL_SEC_DEFAULT, errors)
+  const adminUserCreationEnabled = envBool(
+    env,
+    'ADMIN_USER_CREATION_ENABLED',
+    ADMIN_USER_CREATION_ENABLED_DEFAULT,
+    errors,
+  )
 
   if (errors.length > 0) {
     throw new Error(`Invalid configuration:\n${errors.map((e) => `  - ${e}`).join('\n')}`)
@@ -127,6 +147,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     workerLeaseSec,
     idempotencyTtlSec,
     appBaseUrl,
+    adminUserCreationEnabled,
+    trustProxy,
   }
 }
 

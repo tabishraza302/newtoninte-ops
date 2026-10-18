@@ -1,18 +1,17 @@
-import { and, asc, eq, gt, inArray, isNull, notInArray, sql } from 'drizzle-orm'
+import { and, asc, eq, gt, inArray, isNull, notInArray, sql, type SQL } from 'drizzle-orm'
 import { aliasedTable } from 'drizzle-orm'
 import { db } from '../db/client'
 import { activityEvents, comments, teams, users, workItems } from '../db/schema'
 import type { CommentRow } from '../db/schema'
 import { withTransaction, type Tx } from '../db/tx'
-import { buildPage, decodeCursor, DEFAULT_LIMIT, MAX_LIMIT } from '../http/cursor'
+import { buildPage, decodeCursor, decodeIdCursor, DEFAULT_LIMIT, MAX_LIMIT } from '../http/cursor'
 import { ApiError } from '../http/errors'
-import { authorize, membershipsOf, roleIn, scopeTeamIds } from '../policy'
+import { authorize, can, membershipsOf, roleIn, scopeTeamIds } from '../policy'
 import { ITEM_TYPES, PRIORITIES } from '../domain/types'
 import type { Actor, ItemType, Priority, Status } from '../domain/types'
 import { recordActivity, recordFieldChanges } from './activity'
 import { enqueue } from './outbox'
 import { emailAssigned } from '../outbox/handlers'
-
 export { emailAssigned }
 
 export type ViewName = 'assigned_to_me' | 'unassigned_urgent' | 'awaiting_my_approval' | 'overdue'
@@ -58,6 +57,7 @@ function computeScopeFingerprint(targetTeamIds: number[], query: ListItemsQuery)
   const sortedTeams = [...targetTeamIds].sort((a, b) => a - b).join(',')
   return [
     `teams:${sortedTeams}`,
+    `team:${query.team ?? ''}`,
     `view:${query.view ?? ''}`,
     `status:${query.status ?? ''}`,
     `priority:${query.priority ?? ''}`,
@@ -75,11 +75,20 @@ export async function listItems(
   actor: Actor,
   query: ListItemsQuery,
 ): Promise<{ items: WorkItemRow[]; nextCursor: string | null }> {
-  const myTeamIds = await scopeTeamIds(actor)
-  if (myTeamIds.length === 0) {
-    return { items: [], nextCursor: null }
+  const limit = query.limit ?? DEFAULT_LIMIT
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIMIT) {
+    throw ApiError.of('VALIDATION_ERROR', `limit must be an integer between 1 and ${MAX_LIMIT}`, { limit })
   }
 
+  if (query.view !== undefined && !VALID_VIEWS.includes(query.view)) {
+    throw ApiError.of('VALIDATION_ERROR', `Unknown view: ${String(query.view)}`)
+  }
+
+  if (query.q !== undefined && query.q.length > 100) {
+    throw ApiError.of('VALIDATION_ERROR', 'Search query exceeds 100 characters')
+  }
+
+  const myTeamIds = await scopeTeamIds(actor)
   let targetTeamIds: number[]
   if (query.team !== undefined) {
     if (!myTeamIds.includes(query.team)) {
@@ -90,13 +99,39 @@ export async function listItems(
     targetTeamIds = myTeamIds
   }
 
-  const conditions = []
+  if (query.view === 'awaiting_my_approval') {
+    const memberships = await membershipsOf(actor.id)
+    const leadTeamIds = memberships.filter((m) => m.role === 'lead').map((m) => m.teamId)
+    targetTeamIds = targetTeamIds.filter((tId) => leadTeamIds.includes(tId))
+  }
+
+  const scopeFingerprint = computeScopeFingerprint(targetTeamIds, query)
+
+  let cursorCondition: SQL | undefined
+  if (query.cursor !== undefined && query.cursor !== '') {
+    const cursorValues = decodeCursor(query.cursor, scopeFingerprint)
+    if (cursorValues) {
+      const priorityStr = typeof cursorValues.priority === 'string' ? cursorValues.priority : ''
+      const pRank = PRIORITY_ORDER.indexOf(priorityStr as Priority) + 1
+      const createdAtStr = typeof cursorValues.createdAt === 'string' ? cursorValues.createdAt : ''
+      const idNum = typeof cursorValues.id === 'number' ? cursorValues.id : NaN
+      const createdAtDate = new Date(createdAtStr)
+
+      if (pRank === 0 || !createdAtStr || Number.isNaN(createdAtDate.getTime()) || !Number.isSafeInteger(idNum) || idNum <= 0) {
+        throw ApiError.of('VALIDATION_ERROR', 'Malformed cursor values')
+      }
+
+      cursorCondition = sql`(FIELD(${workItems.priority}, 'low', 'medium', 'high', 'urgent'), ${workItems.createdAt}, ${workItems.id}) < (${pRank}, ${createdAtStr}, ${idNum})`
+    }
+  }
+
+  if (targetTeamIds.length === 0) {
+    return { items: [], nextCursor: null }
+  }
+
+  const conditions = [inArray(workItems.teamId, targetTeamIds)]
 
   if (query.view !== undefined) {
-    if (!VALID_VIEWS.includes(query.view)) {
-      throw ApiError.of('VALIDATION_ERROR', `Unknown view: ${String(query.view)}`)
-    }
-
     switch (query.view) {
       case 'assigned_to_me':
         conditions.push(eq(workItems.assigneeId, actor.id))
@@ -107,24 +142,15 @@ export async function listItems(
         conditions.push(eq(workItems.status, 'open'))
         conditions.push(inArray(workItems.priority, ['high', 'urgent']))
         break
-      case 'awaiting_my_approval': {
-        const memberships = await membershipsOf(actor.id)
-        const leadTeamIds = memberships.filter((m) => m.role === 'lead').map((m) => m.teamId)
-        targetTeamIds = targetTeamIds.filter((tId) => leadTeamIds.includes(tId))
-        if (targetTeamIds.length === 0) {
-          return { items: [], nextCursor: null }
-        }
+      case 'awaiting_my_approval':
         conditions.push(eq(workItems.status, 'awaiting_approval'))
         break
-      }
       case 'overdue':
         conditions.push(sql`${workItems.dueAt} IS NOT NULL AND ${workItems.dueAt} < NOW(3)`)
         conditions.push(notInArray(workItems.status, ['closed', 'cancelled']))
         break
     }
   }
-
-  conditions.push(inArray(workItems.teamId, targetTeamIds))
 
   if (query.status !== undefined) {
     conditions.push(eq(workItems.status, query.status))
@@ -138,40 +164,12 @@ export async function listItems(
   if (query.type !== undefined) {
     conditions.push(eq(workItems.type, query.type))
   }
-
-  if (query.q !== undefined) {
-    if (query.q.length > 100) {
-      throw ApiError.of('VALIDATION_ERROR', 'Search query exceeds 100 characters')
-    }
-    if (query.q.length > 0) {
-      const escaped = escapeLike(query.q)
-      conditions.push(sql`${workItems.title} LIKE ${`%${escaped}%`} ESCAPE '\\\\'`)
-    }
+  if (query.q !== undefined && query.q.length > 0) {
+    const escaped = escapeLike(query.q)
+    conditions.push(sql`${workItems.title} LIKE ${`%${escaped}%`} ESCAPE '\\\\'`)
   }
-
-  const scopeFingerprint = computeScopeFingerprint(targetTeamIds, query)
-
-  if (query.cursor !== undefined && query.cursor !== '') {
-    const cursorValues = decodeCursor(query.cursor, scopeFingerprint)
-    if (cursorValues) {
-      const priorityStr = typeof cursorValues.priority === 'string' ? cursorValues.priority : ''
-      const pRank = PRIORITY_ORDER.indexOf(priorityStr as Priority) + 1
-      const createdAtStr = typeof cursorValues.createdAt === 'string' ? cursorValues.createdAt : ''
-      const idNum = typeof cursorValues.id === 'number' ? cursorValues.id : NaN
-
-      if (pRank === 0 || !createdAtStr || Number.isNaN(idNum)) {
-        throw ApiError.of('VALIDATION_ERROR', 'Malformed cursor values')
-      }
-
-      conditions.push(
-        sql`(FIELD(${workItems.priority}, 'low', 'medium', 'high', 'urgent'), ${workItems.createdAt}, ${workItems.id}) < (${pRank}, ${createdAtStr}, ${idNum})`,
-      )
-    }
-  }
-
-  const limit = query.limit ?? DEFAULT_LIMIT
-  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIMIT) {
-    throw ApiError.of('VALIDATION_ERROR', `limit must be an integer between 1 and ${MAX_LIMIT}`, { limit })
+  if (cursorCondition) {
+    conditions.push(cursorCondition)
   }
 
   const creator = aliasedTable(users, 'creator')
@@ -310,15 +308,9 @@ export async function listActivity(
   const scope = `activity:${itemId}`
   const conditions = [eq(activityEvents.workItemId, itemId)]
 
-  if (cursor !== undefined && cursor !== '') {
-    const cursorValues = decodeCursor(cursor, scope)
-    if (cursorValues) {
-      const cursorId = typeof cursorValues.id === 'number' ? cursorValues.id : NaN
-      if (Number.isNaN(cursorId)) {
-        throw ApiError.of('VALIDATION_ERROR', 'Malformed cursor values')
-      }
-      conditions.push(gt(activityEvents.id, cursorId))
-    }
+  const cursorId = decodeIdCursor(cursor, scope)
+  if (cursorId !== null) {
+    conditions.push(gt(activityEvents.id, cursorId))
   }
 
   const rows = await db
@@ -379,6 +371,9 @@ export async function createItem(actor: Actor, input: CreateItemInput, externalT
     throw ApiError.of('VALIDATION_ERROR', 'Title is required and must not exceed 200 characters')
   }
 
+  if (input.description !== undefined && input.description !== null && Buffer.byteLength(input.description, 'utf8') > 65535) {
+    throw ApiError.of('VALIDATION_ERROR', 'Description exceeds maximum allowed size of 65,535 bytes')
+  }
   if (!ITEM_TYPES.includes(input.type)) {
     throw ApiError.of('VALIDATION_ERROR', `Invalid item type: ${String(input.type)}`)
   }
@@ -408,6 +403,18 @@ export async function createItem(actor: Actor, input: CreateItemInput, externalT
   }
 
   const runTx = async (tx: Tx) => {
+    await authorize(actor, 'item:create', { kind: 'team', teamId: input.teamId }, tx)
+    if (input.assigneeId !== undefined && input.assigneeId !== null) {
+      const actorRole = await roleIn(actor.id, input.teamId, tx)
+      if (actorRole === 'member' && input.assigneeId !== actor.id) {
+        throw ApiError.of('FORBIDDEN', 'Members may only assign items to themselves')
+      }
+      const assigneeRole = await roleIn(input.assigneeId, input.teamId, tx)
+      if (assigneeRole !== 'member' && assigneeRole !== 'lead') {
+        throw ApiError.of('VALIDATION_ERROR', 'Assignee must be a member or lead of the team')
+      }
+    }
+
     const [result] = await tx.insert(workItems).values({
       teamId: input.teamId,
       title: input.title.trim(),
@@ -469,7 +476,7 @@ export async function createItem(actor: Actor, input: CreateItemInput, externalT
               teamName: teamRow.name,
               itemId: id,
             },
-            dedupeKey: `assigned:item:${id}`,
+            dedupeKey: `assigned:item:${id}:version:1`,
           })
         }
       }
@@ -538,6 +545,10 @@ export async function patchItem(actor: Actor, id: number, input: PatchItemInput)
     if (typeof input.title !== 'string' || input.title.trim().length === 0 || input.title.length > 200) {
       throw ApiError.of('VALIDATION_ERROR', 'Title must be non-empty and at most 200 characters')
     }
+  }
+
+  if ('description' in input && input.description !== undefined && input.description !== null && Buffer.byteLength(input.description, 'utf8') > 65535) {
+    throw ApiError.of('VALIDATION_ERROR', 'Description exceeds maximum allowed size of 65,535 bytes')
   }
 
   if ('type' in input && input.type !== undefined) {
@@ -633,13 +644,29 @@ export async function patchItem(actor: Actor, id: number, input: PatchItemInput)
   }
 
   await withTransaction(async (tx) => {
+    if (hasContentField) {
+      await authorize(actor, 'item:editContent', {
+        kind: 'item',
+        teamId: existing.teamId,
+        creatorId: existing.createdBy,
+        assigneeId: existing.assigneeId,
+      }, tx)
+    }
+    if ('priority' in input) {
+      await authorize(actor, 'item:editPriority', {
+        kind: 'item',
+        teamId: existing.teamId,
+        creatorId: existing.createdBy,
+        assigneeId: existing.assigneeId,
+      }, tx)
+    }
     const [result] = await tx
       .update(workItems)
       .set(updateValues)
       .where(and(eq(workItems.id, id), eq(workItems.version, input.version)))
 
     if (result.affectedRows === 0) {
-      const currentItem = await getItem(actor, id)
+      const currentItem = await getItem(actor, id, tx)
       throw ApiError.of('VERSION_CONFLICT', 'Item version conflict', currentItem)
     }
 
@@ -670,6 +697,12 @@ export async function claimItem(actor: Actor, id: number): Promise<WorkItemRow> 
   })
 
   await withTransaction(async (tx) => {
+    await authorize(actor, 'item:claim', {
+      kind: 'item',
+      teamId: existing.teamId,
+      creatorId: existing.createdBy,
+      assigneeId: existing.assigneeId,
+    }, tx)
     const [result] = await tx
       .update(workItems)
       .set({
@@ -743,6 +776,36 @@ export async function assignItem(
   }
 
   await withTransaction(async (tx) => {
+    const [current] = await tx
+      .select()
+      .from(workItems)
+      .where(eq(workItems.id, id))
+      .for('update')
+
+    if (!current) {
+      throw ApiError.of('NOT_FOUND')
+    }
+
+    if (current.version !== expectedVersion) {
+      throw ApiError.of('STALE_STATE', 'Item version conflict or stale state')
+    }
+
+    await authorize(actor, 'item:assign', {
+      kind: 'item',
+      teamId: current.teamId,
+      creatorId: current.createdBy,
+      assigneeId: current.assigneeId,
+    }, tx)
+
+    const currentAssigneeRole = await roleIn(assigneeId, current.teamId, tx)
+    if (currentAssigneeRole !== 'member' && currentAssigneeRole !== 'lead') {
+      throw ApiError.of('VALIDATION_ERROR', 'Assignee must be a member or lead of the team')
+    }
+
+    if (current.assigneeId === assigneeId) {
+      return
+    }
+
     const [result] = await tx
       .update(workItems)
       .set({
@@ -760,7 +823,7 @@ export async function assignItem(
       workItemId: id,
       actorId: actor.id,
       type: 'assignee_changed',
-      fromValue: existing.assigneeId !== null ? String(existing.assigneeId) : null,
+      fromValue: current.assigneeId !== null ? String(current.assigneeId) : null,
       toValue: String(assigneeId),
     })
 
@@ -768,7 +831,7 @@ export async function assignItem(
       const [teamRow] = await tx
         .select({ name: teams.name })
         .from(teams)
-        .where(eq(teams.id, existing.teamId))
+        .where(eq(teams.id, current.teamId))
         .limit(1)
       const [assigneeUser] = await tx
         .select({ email: users.email })
@@ -781,11 +844,11 @@ export async function assignItem(
           type: 'email.assigned',
           payload: {
             to: assigneeUser.email,
-            itemTitle: existing.title,
+            itemTitle: current.title,
             teamName: teamRow.name,
             itemId: id,
           },
-          dedupeKey: `assigned:item:${id}`,
+          dedupeKey: `assigned:item:${id}:version:${expectedVersion + 1}`,
         })
       }
     }
@@ -843,6 +906,12 @@ export async function transitionItem(
   to: Status,
   reason?: string,
 ): Promise<WorkItemRow> {
+  if (reason !== undefined) {
+    if (typeof reason !== 'string' || reason.length > 10000 || Buffer.byteLength(reason, 'utf8') > 65535) {
+      throw ApiError.of('VALIDATION_ERROR', 'Reason must not exceed 10000 characters or 65,535 bytes')
+    }
+  }
+
   const [existing] = await db.select().from(workItems).where(eq(workItems.id, id)).limit(1)
   if (!existing) {
     throw ApiError.of('NOT_FOUND')
@@ -859,10 +928,22 @@ export async function transitionItem(
     throw ApiError.of('INVALID_TRANSITION', `Cannot transition from ${existing.status} to ${to}`)
   }
 
-  if (config.isStart) {
+  if (to === 'in_progress') {
     if (existing.assigneeId === null) {
-      throw ApiError.of('INVALID_TRANSITION', 'Unassigned items must be claimed, not transitioned')
+      throw ApiError.of(
+        'INVALID_TRANSITION',
+        config.isStart
+          ? 'Unassigned items must be claimed, not transitioned'
+          : 'Cannot transition to in_progress without an assignee',
+      )
     }
+    const assigneeRole = await roleIn(existing.assigneeId, existing.teamId)
+    if (assigneeRole !== 'member' && assigneeRole !== 'lead') {
+      throw ApiError.of('INVALID_TRANSITION', 'Item assignee must be a member or lead of the team to be in_progress')
+    }
+  }
+
+  if (config.isStart) {
     if (role !== 'lead' && (role !== 'member' || actor.id !== existing.assigneeId)) {
       throw ApiError.of('FORBIDDEN', 'Only the assignee or a lead may start this item')
     }
@@ -876,6 +957,53 @@ export async function transitionItem(
   }
 
   await withTransaction(async (tx) => {
+    const [locked] = await tx
+      .select()
+      .from(workItems)
+      .where(eq(workItems.id, id))
+      .for('update')
+
+    if (!locked) {
+      throw ApiError.of('NOT_FOUND')
+    }
+
+    if (locked.status !== existing.status) {
+      throw ApiError.of('STALE_STATE', 'Item status has changed')
+    }
+
+    const currentActorRole = await roleIn(actor.id, locked.teamId, tx)
+    if (currentActorRole === null) {
+      throw ApiError.of('NOT_FOUND')
+    }
+
+    if (to === 'in_progress') {
+      if (locked.assigneeId === null) {
+        throw ApiError.of(
+          'INVALID_TRANSITION',
+          config.isStart
+            ? 'Unassigned items must be claimed, not transitioned'
+            : 'Cannot transition to in_progress without an assignee',
+        )
+      }
+      const lockedAssigneeRole = await roleIn(locked.assigneeId, locked.teamId, tx)
+      if (lockedAssigneeRole !== 'member' && lockedAssigneeRole !== 'lead') {
+        throw ApiError.of('INVALID_TRANSITION', 'Item assignee must be a member or lead of the team to be in_progress')
+      }
+    }
+
+    if (config.isStart) {
+      if (currentActorRole !== 'lead' && (currentActorRole !== 'member' || actor.id !== locked.assigneeId)) {
+        throw ApiError.of('FORBIDDEN', 'Only the assignee or a lead may start this item')
+      }
+    } else if (config.action) {
+      await authorize(actor, config.action, {
+        kind: 'item',
+        teamId: locked.teamId,
+        creatorId: locked.createdBy,
+        assigneeId: locked.assigneeId,
+      }, tx)
+    }
+
     const [result] = await tx
       .update(workItems)
       .set({
@@ -888,7 +1016,6 @@ export async function transitionItem(
     if (result.affectedRows === 0) {
       throw ApiError.of('STALE_STATE', 'Item status has changed')
     }
-
     await recordActivity(tx, {
       workItemId: id,
       actorId: actor.id,
@@ -936,11 +1063,17 @@ export async function addComment(actor: Actor, id: number, body: string): Promis
     assigneeId: existing.assigneeId,
   })
 
-  if (typeof body !== 'string' || body.trim().length === 0 || body.length > 10000) {
-    throw ApiError.of('VALIDATION_ERROR', 'Comment body must be between 1 and 10000 characters')
+  if (typeof body !== 'string' || body.trim().length === 0 || body.length > 10000 || Buffer.byteLength(body, 'utf8') > 65535) {
+    throw ApiError.of('VALIDATION_ERROR', 'Comment body must be between 1 and 10000 characters and at most 65,535 bytes')
   }
 
   const comment = await withTransaction(async (tx) => {
+    await authorize(actor, 'item:comment', {
+      kind: 'item',
+      teamId: existing.teamId,
+      creatorId: existing.createdBy,
+      assigneeId: existing.assigneeId,
+    }, tx)
     const [result] = await tx.insert(comments).values({
       workItemId: id,
       authorId: actor.id,

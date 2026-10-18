@@ -277,9 +277,9 @@ describe('items service - transitionItem (Task 4.7)', () => {
     const item = await seedItem(team.id, {
       createdBy: lead.id,
       status: 'resolved',
+      assigneeId: lead.id,
       version: 1,
     })
-
     const updated = await transitionItem({ id: lead.id, isAdmin: false }, item.id, 'in_progress')
     expect(updated.status).toBe('in_progress')
   })
@@ -378,5 +378,104 @@ describe('items service - transitionItem (Task 4.7)', () => {
     }
     expect(caughtCancelled).toBeInstanceOf(ApiError)
     expect((caughtCancelled as ApiError).code).toBe('INVALID_TRANSITION')
+  })
+
+  it('cannot transition awaiting_approval -> in_progress (send back) if assignee is null (422 INVALID_TRANSITION)', async () => {
+    const lead = await seedUser()
+    const team = await seedTeam()
+    await seedMembership(lead.id, team.id, 'lead')
+
+    const item = await seedItem(team.id, {
+      createdBy: lead.id,
+      status: 'awaiting_approval',
+      assigneeId: null,
+      version: 1,
+    })
+
+    let caughtError: unknown
+    try {
+      await transitionItem({ id: lead.id, isAdmin: false }, item.id, 'in_progress', 'Needs rework')
+    } catch (e) {
+      caughtError = e
+    }
+
+    expect(caughtError).toBeInstanceOf(ApiError)
+    expect((caughtError as ApiError).code).toBe('INVALID_TRANSITION')
+    expect((caughtError as ApiError).status).toBe(422)
+  })
+
+  it('cannot transition resolved -> in_progress (reopen) if assignee is null (422 INVALID_TRANSITION)', async () => {
+    const lead = await seedUser()
+    const team = await seedTeam()
+    await seedMembership(lead.id, team.id, 'lead')
+
+    const item = await seedItem(team.id, {
+      createdBy: lead.id,
+      status: 'resolved',
+      assigneeId: null,
+      version: 1,
+    })
+
+    let caughtError: unknown
+    try {
+      await transitionItem({ id: lead.id, isAdmin: false }, item.id, 'in_progress', 'Reopening issue')
+    } catch (e) {
+      caughtError = e
+    }
+
+    expect(caughtError).toBeInstanceOf(ApiError)
+    expect((caughtError as ApiError).code).toBe('INVALID_TRANSITION')
+    expect((caughtError as ApiError).status).toBe(422)
+  })
+
+  it('cannot transition to in_progress if assignee was removed from team (422 INVALID_TRANSITION)', async () => {
+    const lead = await seedUser()
+    const formerMember = await seedUser()
+    const team = await seedTeam()
+    await seedMembership(lead.id, team.id, 'lead')
+    // formerMember has no membership in team
+
+    const item = await seedItem(team.id, {
+      createdBy: lead.id,
+      status: 'open',
+      assigneeId: formerMember.id,
+      version: 1,
+    })
+
+    let caughtError: unknown
+    try {
+      await transitionItem({ id: lead.id, isAdmin: false }, item.id, 'in_progress')
+    } catch (e) {
+      caughtError = e
+    }
+
+    expect(caughtError).toBeInstanceOf(ApiError)
+    expect((caughtError as ApiError).code).toBe('INVALID_TRANSITION')
+    expect((caughtError as ApiError).status).toBe(422)
+  })
+
+  it('transition with reason exceeding 10,000 characters throws 422 VALIDATION_ERROR', async () => {
+    const lead = await seedUser()
+    const team = await seedTeam()
+    await seedMembership(lead.id, team.id, 'lead')
+
+    const item = await seedItem(team.id, {
+      createdBy: lead.id,
+      status: 'awaiting_approval',
+      assigneeId: lead.id,
+      version: 1,
+    })
+
+    const tooLongReason = 'A'.repeat(10001)
+    let caughtError: unknown
+    try {
+      await transitionItem({ id: lead.id, isAdmin: false }, item.id, 'resolved', tooLongReason)
+    } catch (e) {
+      caughtError = e
+    }
+
+    expect(caughtError).toBeInstanceOf(ApiError)
+    expect((caughtError as ApiError).code).toBe('VALIDATION_ERROR')
+    expect((caughtError as ApiError).status).toBe(422)
   })
 })

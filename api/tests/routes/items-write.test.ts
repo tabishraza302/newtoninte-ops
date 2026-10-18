@@ -104,6 +104,29 @@ describe('Items write routes', () => {
       expect(resMismatch.status).toBe(422)
       expect(resMismatch.body.error?.code).toBe('IDEMPOTENCY_KEY_MISMATCH')
     })
+
+    it('Idempotency-Key exceeding 255 chars returns 422 VALIDATION_ERROR', async () => {
+      const team = await seedTeam()
+      const user = await seedUser()
+      await seedMembership(user.id, team.id, 'lead')
+      const token = await signAccessToken(user.id)
+
+      const payload = {
+        teamId: team.id,
+        title: 'Task with long idem key',
+        type: 'task',
+        priority: 'high',
+      }
+
+      const res = await request(app)
+        .post('/items')
+        .set('Authorization', `Bearer ${token}`)
+        .set('Idempotency-Key', 'k'.repeat(256))
+        .send(payload)
+
+      expect(res.status).toBe(422)
+      expect(res.body.error?.code).toBe('VALIDATION_ERROR')
+    })
   })
 
   describe('PATCH /items/:id', () => {
@@ -254,6 +277,30 @@ describe('Items write routes', () => {
       expect(currentItem.version).toBe(item.version)
       expect(currentItem.title).toBe('Current State Item')
     })
+
+    it('PATCH /items/:id with unknown field returns 422 VALIDATION_ERROR', async () => {
+      const team = await seedTeam()
+      const user = await seedUser()
+      await seedMembership(user.id, team.id, 'lead')
+      const item = await seedItem(team.id, {
+        title: 'Original',
+        createdBy: user.id,
+      })
+      const token = await signAccessToken(user.id)
+
+      const res = await request(app)
+        .patch(`/items/${item.id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          version: 1,
+          title: 'New Title',
+          bogusField: 'unexpected',
+        })
+
+      expect(res.status).toBe(422)
+      expect(res.body.error?.code).toBe('VALIDATION_ERROR')
+    })
+
   })
 
   describe('POST /items/:id/claim', () => {

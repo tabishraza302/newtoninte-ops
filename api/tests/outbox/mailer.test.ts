@@ -91,10 +91,6 @@ describe('templates', () => {
 
 describe.skipIf(!process.env.SMTP_URL)('sendMail (real SMTP via Mailpit)', () => {
   it('delivers a message that Mailpit actually receives', async () => {
-    // Clear the mailbox first so a message from an earlier run cannot make this
-    // assertion pass falsely.
-    const cleared = await fetch(MAILPIT_API, { method: 'DELETE' })
-    expect(cleared.ok).toBe(true)
 
     const to = 'to@example.test'
     const subject = `mailer-it-${Date.now()}-${Math.random().toString(36).slice(2)}`

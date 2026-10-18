@@ -87,6 +87,7 @@ describe('outbox worker', () => {
     expect(row.status).toBe('done')
     expect(row.payload).toBeNull()
     expect(row.locked_by).toBeNull()
+    expect(row.locked_at).toBeNull()
   })
 
   it('(b) handles handler error: attempts incremented, status pending, last_error set, available_at in future', async () => {
@@ -258,5 +259,29 @@ describe('outbox worker', () => {
     const row = await fetchJob(dedupeKey)
     expect(row.status).toBe('done')
     expect(row.payload).toBeNull()
+  })
+  it('(f) reclaims a processing row whose locked_at is NULL', async () => {
+    const dedupeKey = 'test-worker-null-locked-at'
+    await withTransaction(async (tx) => {
+      await enqueue(tx, {
+        type: 'email.invite',
+        payload: { to: 'stranded@example.test' },
+        dedupeKey,
+      })
+    })
+
+    // Manually strand row in 'processing' with locked_at = NULL
+    await pool.query(
+      "UPDATE outbox_jobs SET status = 'processing', locked_at = NULL, locked_by = 'crashed:999' WHERE dedupe_key = ?",
+      [dedupeKey],
+    )
+
+    const processed = await runOnce({ handlers: { 'email.invite': vi.fn(), 'email.reset': vi.fn(), 'email.assigned': vi.fn() } })
+    // runOnce returns claimed count, sweep pass reclaims stranded row to pending
+    const row = await fetchJob(dedupeKey)
+    expect(row.status).toBe('pending')
+    expect(row.locked_by).toBeNull()
+    expect(row.locked_at).toBeNull()
+    expect(row.last_error).toMatch(/lease/i)
   })
 })

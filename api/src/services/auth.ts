@@ -14,6 +14,9 @@ export async function login(
   password: string,
   ctx: SessionCtx = {},
 ): Promise<{ user: PublicUser; accessToken: string; refreshToken: string }> {
+  if (Buffer.byteLength(password, 'utf8') > 72) {
+    throw ApiError.of('UNAUTHENTICATED')
+  }
   const normalizedEmail = email.toLowerCase().trim()
   const [row] = await db
     .select({ ...publicUserColumns, passwordHash: users.passwordHash })

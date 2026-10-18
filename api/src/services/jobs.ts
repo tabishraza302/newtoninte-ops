@@ -13,10 +13,10 @@ import { db } from '../db/client'
 import { outboxJobs, users, type OutboxJobRow } from '../db/schema'
 import { withTransaction } from '../db/tx'
 import { OUTBOX_TYPES, type Actor, type OutboxJobType } from '../domain/types'
-import { buildPage, decodeCursor, DEFAULT_LIMIT, MAX_LIMIT } from '../http/cursor'
+import { buildPage, decodeIdCursor, DEFAULT_LIMIT, MAX_LIMIT } from '../http/cursor'
 import { ApiError } from '../http/errors'
 import { can } from '../policy'
-import { revokeAllForUser } from './sessions'
+export { setUserStatus } from './users'
 
 /** The four states a queue row can be in (mirrors the schema enum). */
 export type JobStatus = 'pending' | 'processing' | 'done' | 'failed'
@@ -114,7 +114,7 @@ export async function listJobs(
   }
 
   // The cursor scope fingerprint: the filter set a cursor was minted for.
-  // `decodeCursor` rejects a cursor replayed against a different filter set
+  // The cursor decoder rejects a cursor replayed against a different filter set
   // (422) rather than silently returning a wrong page.
   const scope = `jobs:status=${query.status ?? ''};type=${query.type ?? ''}`
   const conditions: SQL[] = []
@@ -126,15 +126,9 @@ export async function listJobs(
     conditions.push(eq(outboxJobs.type, query.type))
   }
 
-  if (query.cursor !== undefined && query.cursor !== '') {
-    const cursorValues = decodeCursor(query.cursor, scope)
-    if (cursorValues) {
-      const cursorId = typeof cursorValues.id === 'number' ? cursorValues.id : NaN
-      if (Number.isNaN(cursorId)) {
-        throw ApiError.of('VALIDATION_ERROR', 'Malformed cursor values')
-      }
-      conditions.push(lt(outboxJobs.id, cursorId))
-    }
+  const cursorId = decodeIdCursor(query.cursor, scope)
+  if (cursorId !== null) {
+    conditions.push(lt(outboxJobs.id, cursorId))
   }
 
   const rows: JobView[] = await db
@@ -258,43 +252,3 @@ export async function retryJob(actor: Actor, id: number): Promise<void> {
   }
 }
 
-/**
- * Enables or disables a user account (spec §7.1 `PATCH /admin/users/:id`).
- *
- * Admin-only on `actor.isAdmin` — this is an account-level action, not
- * work-item access, so no membership role grants it.
- *
- * Disabling also revokes every live refresh token in the same transaction:
- * login and `me` already refuse a disabled account, but an already-minted
- * refresh family would otherwise keep rotating for its full 30-day TTL. Doing
- * both writes in one transaction means there is no committed state in which
- * the account is disabled *and* a usable refresh token exists — the same
- * either-both-or-neither property the outbox buys for side effects.
- */
-export async function setUserStatus(
-  actor: Actor,
-  userId: number,
-  status: 'active' | 'disabled',
-): Promise<void> {
-  if (!actor.isAdmin) {
-    throw ApiError.of('FORBIDDEN')
-  }
-
-  await withTransaction(async (tx) => {
-    const [user] = await tx
-      .select({ id: users.id })
-      .from(users)
-      .where(eq(users.id, userId))
-      .limit(1)
-
-    if (!user) {
-      throw ApiError.of('NOT_FOUND')
-    }
-
-    await tx.update(users).set({ status }).where(eq(users.id, userId))
-
-    if (status === 'disabled') {
-      await revokeAllForUser(userId, tx)
-    }
-  })
-}

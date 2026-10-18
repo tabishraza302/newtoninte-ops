@@ -1,7 +1,7 @@
 import React from 'react'
 import { Link } from 'react-router-dom'
 import type { WorkItem } from '../api/types'
-import { getStatusBadgeStyle, getPriorityBadgeStyle } from '../theme'
+import { getStatusBadgeStyle, getPriorityBadgeStyle, theme } from '../theme'
 
 export interface ItemRowProps {
   item: WorkItem
@@ -37,8 +37,8 @@ export function ItemRow({ item }: ItemRowProps): React.ReactElement {
             display: 'inline-block',
             transition: 'color 0.15s ease',
           }}
-          onMouseEnter={(e) => (e.currentTarget.style.color = '#2563eb')}
-          onMouseLeave={(e) => (e.currentTarget.style.color = '#0f172a')}
+          onMouseEnter={(e) => (e.currentTarget.style.color = theme.colors.accent)}
+          onMouseLeave={(e) => (e.currentTarget.style.color = theme.colors.textPrimary)}
         >
           {item.title}
         </Link>
@@ -71,7 +71,7 @@ export function ItemRow({ item }: ItemRowProps): React.ReactElement {
         {assigneeName}
       </div>
 
-      <div style={{ flex: 1, fontSize: '0.8125rem', color: '#64748b', textAlign: 'right', whiteSpace: 'nowrap' }}>
+      <div style={{ flex: 1, fontSize: '0.8125rem', color: '#64748b', textAlign: 'right', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
         {dueDate}
       </div>
     </div>

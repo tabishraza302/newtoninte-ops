@@ -15,8 +15,8 @@ import { createInvitation, listInvitations } from '../../services/invitations'
 export const teamsRouter: Router = Router()
 
 const createTeamSchema = z.object({
-  name: z.string().min(1).max(255),
-  slug: z.string().min(1).max(255),
+  name: z.string().trim().min(1).max(120),
+  slug: z.string().trim().min(1).max(80),
 })
 
 const teamIdParamSchema = z.object({
@@ -38,7 +38,7 @@ const setMemberRoleSchema = z.object({
 })
 
 const createInvitationSchema = z.object({
-  email: z.string().email(),
+  email: z.string().trim().email(),
   role: z.enum(ROLES),
   maxUses: z.number().int().positive().optional(),
 })

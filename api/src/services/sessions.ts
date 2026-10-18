@@ -1,7 +1,7 @@
 import { and, eq, isNull, sql } from 'drizzle-orm'
 import { config } from '../config'
 import { db } from '../db/client'
-import { refreshTokens } from '../db/schema'
+import { refreshTokens, users } from '../db/schema'
 import { withTransaction, type Tx } from '../db/tx'
 import { ApiError } from '../http/errors'
 import { randomToken, sha256, uuid } from './crypto'
@@ -31,21 +31,38 @@ export async function issueFamily(
   ctx: SessionCtx = {},
   tx?: Tx,
 ): Promise<IssuedSession> {
-  const runner = tx ?? db
   const familyId = uuid()
   const refreshToken = randomToken()
   const tokenHash = sha256(refreshToken)
 
-  await runner.insert(refreshTokens).values({
-    userId,
-    familyId,
-    tokenHash,
-    expiresAt: sql`DATE_ADD(CURRENT_TIMESTAMP(3), INTERVAL ${config.refreshTtlSec} SECOND)`,
-    userAgent: ctx.userAgent ? ctx.userAgent.slice(0, 255) : null,
-    ip: ctx.ip ? ctx.ip.slice(0, 45) : null,
-  })
+  const execute = async (runner: Tx) => {
+    const [user] = await runner
+      .select({ id: users.id, status: users.status })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1)
+      .for('update')
 
-  return { refreshToken, familyId }
+    if (!user || user.status === 'disabled') {
+      throw ApiError.of('FORBIDDEN')
+    }
+
+    await runner.insert(refreshTokens).values({
+      userId,
+      familyId,
+      tokenHash,
+      expiresAt: sql`DATE_ADD(CURRENT_TIMESTAMP(3), INTERVAL ${config.refreshTtlSec} SECOND)`,
+      userAgent: ctx.userAgent ? ctx.userAgent.slice(0, 255) : null,
+      ip: ctx.ip ? ctx.ip.slice(0, 45) : null,
+    })
+
+    return { refreshToken, familyId }
+  }
+
+  if (tx) {
+    return await execute(tx)
+  }
+  return await withTransaction(execute)
 }
 
 /**
@@ -69,13 +86,44 @@ export async function rotate(
     | { kind: 'theft' }
 
   const result = await withTransaction<RotateOutcome>(async (tx) => {
+    const [candidate] = await tx
+      .select({ id: refreshTokens.id, userId: refreshTokens.userId })
+      .from(refreshTokens)
+      .where(eq(refreshTokens.tokenHash, presentedHash))
+      .limit(1)
+
+    if (!candidate) {
+      return { kind: 'unauthenticated' }
+    }
+
+    // Lock user row first to enforce global lock ordering (users -> refresh_tokens)
+    const [user] = await tx
+      .select({ id: users.id, status: users.status })
+      .from(users)
+      .where(eq(users.id, candidate.userId))
+      .limit(1)
+      .for('update')
+
     const [tokenRow] = await tx
       .select()
       .from(refreshTokens)
-      .where(eq(refreshTokens.tokenHash, presentedHash))
+      .where(eq(refreshTokens.id, candidate.id))
       .for('update')
 
     if (!tokenRow) {
+      return { kind: 'unauthenticated' }
+    }
+
+    const familyId = tokenRow.familyId
+
+    if (!user || user.status === 'disabled') {
+      await tx
+        .update(refreshTokens)
+        .set({
+          revokedAt: sql`COALESCE(revoked_at, CURRENT_TIMESTAMP(3))`,
+          replacedBy: null,
+        })
+        .where(eq(refreshTokens.familyId, familyId))
       return { kind: 'unauthenticated' }
     }
 
@@ -83,8 +131,6 @@ export async function rotate(
     if (new Date(tokenRow.expiresAt).getTime() <= Date.now()) {
       return { kind: 'unauthenticated' }
     }
-
-    const familyId = tokenRow.familyId
 
     // Handle revoked token
     if (tokenRow.revokedAt !== null) {
@@ -122,11 +168,14 @@ export async function rotate(
         }
       }
 
-      // Beyond grace window or explicitly revoked: theft! Nuke the entire family on tx
+      // Beyond grace window, replacedBy is null, or explicitly revoked: theft! Nuke the entire family on tx
       await tx
         .update(refreshTokens)
-        .set({ revokedAt: sql`CURRENT_TIMESTAMP(3)` })
-        .where(and(eq(refreshTokens.familyId, familyId), isNull(refreshTokens.revokedAt)))
+        .set({
+          revokedAt: sql`COALESCE(revoked_at, CURRENT_TIMESTAMP(3))`,
+          replacedBy: null,
+        })
+        .where(eq(refreshTokens.familyId, familyId))
 
       return { kind: 'theft' }
     }
@@ -168,25 +217,28 @@ export async function rotate(
 /**
  * Revokes all tokens in a session family.
  */
-export async function revokeFamily(familyId: string): Promise<void> {
-  await db
+export async function revokeFamily(familyId: string, tx?: Tx): Promise<void> {
+  const runner = tx ?? db
+  await runner
     .update(refreshTokens)
-    .set({ revokedAt: sql`CURRENT_TIMESTAMP(3)` })
-    .where(and(eq(refreshTokens.familyId, familyId), isNull(refreshTokens.revokedAt)))
+    .set({
+      revokedAt: sql`COALESCE(revoked_at, CURRENT_TIMESTAMP(3))`,
+      replacedBy: null,
+    })
+    .where(eq(refreshTokens.familyId, familyId))
 }
 
 /**
  * Revokes all active refresh tokens for a user across all families.
- *
- * `tx` lets a caller revoke in the same transaction as the change that
- * motivates it — disabling an account writes the status flip and the
- * revocation together, so no committed state has a disabled account with a
- * live refresh family (`issueFamily` takes a `tx` for the same reason).
+ * Clears replacedBy on all rows so no rotated ancestor can resurrect a family.
  */
 export async function revokeAllForUser(userId: number, tx?: Tx): Promise<void> {
   const runner = tx ?? db
   await runner
     .update(refreshTokens)
-    .set({ revokedAt: sql`CURRENT_TIMESTAMP(3)` })
-    .where(and(eq(refreshTokens.userId, userId), isNull(refreshTokens.revokedAt)))
+    .set({
+      revokedAt: sql`COALESCE(revoked_at, CURRENT_TIMESTAMP(3))`,
+      replacedBy: null,
+    })
+    .where(eq(refreshTokens.userId, userId))
 }

@@ -35,6 +35,15 @@ describe('teams service', () => {
     expect(created.updatedAt).toBeInstanceOf(Date)
   })
 
+  it('createTeam: duplicate slug throws VALIDATION_ERROR', async () => {
+    const admin: Actor = { id: (await seedUser()).id, isAdmin: true }
+    await createTeam(admin, { name: 'First Team', slug: 'unique-slug' })
+
+    expect(
+      await errorCode(() => createTeam(admin, { name: 'Second Team', slug: 'unique-slug' })),
+    ).toBe('VALIDATION_ERROR')
+  })
+
   it('listTeams: returns only teams the actor belongs to, unless admin with all: true', async () => {
     const user1 = await seedUser({ email: 'user1@example.test' })
     const user2 = await seedUser({ email: 'user2@example.test' })

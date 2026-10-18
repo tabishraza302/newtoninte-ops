@@ -23,10 +23,11 @@ export function clearRefreshCookie(res: Response): void {
 }
 
 export function readRefreshCookie(req: Request): string | undefined {
-  const reqWithCookies = req as Request & { cookies?: Record<string, string | undefined> }
-  const fromReqCookies = reqWithCookies.cookies?.[REFRESH_COOKIE_NAME]
-  if (typeof fromReqCookies === 'string' && fromReqCookies.length > 0) {
-    return fromReqCookies
+  if ('cookies' in req && req.cookies && typeof req.cookies === 'object' && REFRESH_COOKIE_NAME in req.cookies) {
+    const rawCookie = req.cookies[REFRESH_COOKIE_NAME]
+    if (typeof rawCookie === 'string' && rawCookie.length > 0) {
+      return rawCookie
+    }
   }
 
   const cookieHeader = req.headers.cookie

@@ -1,63 +1,165 @@
-import React, { useState } from 'react'
-import { useItems } from '../api/hooks'
-import type { ViewName } from '../api/types'
+import React, { useState, useEffect } from 'react'
+import { useItems, useTeams } from '../api/hooks'
+import type { ViewName, WorkItem } from '../api/types'
 import { ItemRow } from '../components/ItemRow'
-import { commonStyles, theme } from '../theme'
+import { commonStyles, theme, getApiErrorMessage } from '../theme'
 
-export const DASHBOARD_TABS: { key: ViewName; label: string }[] = [
-  { key: 'assigned_to_me', label: 'Assigned to Me' },
-  { key: 'unassigned_urgent', label: 'Unassigned Urgent' },
-  { key: 'awaiting_my_approval', label: 'Awaiting My Approval' },
-  { key: 'overdue', label: 'Overdue' },
+export const DASHBOARD_TABS: { key: ViewName; label: string; description: string }[] = [
+  {
+    key: 'assigned_to_me',
+    label: 'Assigned to Me',
+    description: 'Active items owned by your account across all teams',
+  },
+  {
+    key: 'unassigned_urgent',
+    label: 'Unassigned Urgent',
+    description: 'Open urgent and high-priority items awaiting ownership',
+  },
+  {
+    key: 'awaiting_my_approval',
+    label: 'Awaiting My Approval',
+    description: 'Submitted items awaiting lead review and resolution',
+  },
+  {
+    key: 'overdue',
+    label: 'Overdue',
+    description: 'Active items whose due date has passed without closure',
+  },
 ]
 
 export function Dashboard(): React.ReactElement {
   const [activeTab, setActiveTab] = useState<ViewName>('assigned_to_me')
-  const { data, isLoading, error } = useItems({ view: activeTab })
+  const [selectedTeamId, setSelectedTeamId] = useState<string>('')
+  const [cursor, setCursor] = useState<string | undefined>(undefined)
+  const [items, setItems] = useState<WorkItem[]>([])
+  const [prevFilterKey, setPrevFilterKey] = useState(`${activeTab}|${selectedTeamId}`)
+
+  const { data: teamsData } = useTeams()
+  const teams = teamsData?.teams ?? []
+
+  const currentFilterKey = `${activeTab}|${selectedTeamId}`
+  if (currentFilterKey !== prevFilterKey) {
+    setPrevFilterKey(currentFilterKey)
+    setCursor(undefined)
+    setItems([])
+  }
+
+  const query: Parameters<typeof useItems>[0] = {
+    view: activeTab,
+    ...(selectedTeamId ? { team: parseInt(selectedTeamId, 10) } : {}),
+    ...(cursor ? { cursor } : {}),
+  }
+
+  const { data, isLoading, isFetching, error } = useItems(query)
+
+  useEffect(() => {
+    if (data?.items) {
+      if (!cursor) {
+        setItems(data.items)
+      } else {
+        setItems((prev) => {
+          const freshIds = new Set(data.items.map((i) => i.id))
+          const existing = prev.filter((i) => !freshIds.has(i.id))
+          return [...existing, ...data.items]
+        })
+      }
+    }
+  }, [data, cursor])
+
+  const activeTabMeta = DASHBOARD_TABS.find((t) => t.key === activeTab)
+  const nextCursor = data?.nextCursor ?? null
 
   return (
     <div className="dashboard-page" style={commonStyles.pageContainer}>
-      <header style={{ marginBottom: '1.75rem' }}>
-        <h1 style={{ fontSize: '1.75rem', fontWeight: 800, color: '#0f172a', margin: '0 0 0.35rem', letterSpacing: '-0.02em' }}>
-          Dashboard
-        </h1>
-        <p style={{ color: '#64748b', fontSize: '0.875rem', margin: 0 }}>
-          Operational triage views: urgent requests, assignments, and approvals
-        </p>
+      <header
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'flex-start',
+          flexWrap: 'wrap',
+          gap: '1rem',
+          marginBottom: '1.75rem',
+        }}
+      >
+        <div>
+          <h1
+            style={{
+              fontSize: '1.75rem',
+              fontWeight: 800,
+              color: theme.colors.textPrimary,
+              margin: '0 0 0.35rem',
+              letterSpacing: '-0.02em',
+            }}
+          >
+            Dashboard
+          </h1>
+          <p style={{ color: theme.colors.textMuted, fontSize: '0.875rem', margin: 0 }}>
+            {activeTabMeta?.description ?? 'Operational triage queues and triage views'}
+          </p>
+        </div>
+
+        {/* Team scope filter */}
+        {teams.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <label htmlFor="dashboard-team-filter" style={{ fontSize: '0.8125rem', fontWeight: 600, color: theme.colors.textSecondary, whiteSpace: 'nowrap' }}>
+              Team:
+            </label>
+            <select
+              id="dashboard-team-filter"
+              value={selectedTeamId}
+              onChange={(e) => setSelectedTeamId(e.target.value)}
+              style={{
+                ...commonStyles.select,
+                padding: '0.4rem 0.75rem',
+                fontSize: '0.8125rem',
+                minWidth: '160px',
+              }}
+            >
+              <option value="">All My Teams</option>
+              {teams.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </header>
 
+      {/* Tabs */}
       <nav
         role="tablist"
         aria-label="Dashboard Views"
         style={{
           display: 'flex',
-          gap: '0.25rem',
-          borderBottom: '1px solid #e2e8f0',
+          gap: '0.5rem',
+          borderBottom: `1px solid ${theme.colors.border}`,
           marginBottom: '1.5rem',
           overflowX: 'auto',
+          paddingBottom: '0.25rem',
         }}
       >
         {DASHBOARD_TABS.map((tab) => {
-          const isSelected = activeTab === tab.key
+          const isActive = activeTab === tab.key
           return (
             <button
               key={tab.key}
+              type="button"
               role="tab"
-              aria-selected={isSelected}
+              aria-selected={isActive}
               onClick={() => setActiveTab(tab.key)}
               style={{
-                padding: '0.65rem 1rem',
-                border: 'none',
-                borderBottom: isSelected ? '2px solid #2563eb' : '2px solid transparent',
-                marginBottom: '-1px',
-                background: 'none',
-                cursor: 'pointer',
-                fontWeight: isSelected ? 600 : 500,
+                padding: '0.6rem 1rem',
                 fontSize: '0.875rem',
-                color: isSelected ? '#2563eb' : '#64748b',
-                transition: 'all 0.15s ease',
-                whiteSpace: 'nowrap',
+                fontWeight: isActive ? 600 : 500,
+                color: isActive ? theme.colors.accent : theme.colors.textMuted,
+                backgroundColor: 'transparent',
+                border: 'none',
+                borderBottom: isActive ? `2px solid ${theme.colors.accent}` : '2px solid transparent',
+                cursor: 'pointer',
                 fontFamily: 'inherit',
+                whiteSpace: 'nowrap',
+                transition: 'all 0.15s ease',
               }}
             >
               {tab.label}
@@ -66,88 +168,121 @@ export function Dashboard(): React.ReactElement {
         })}
       </nav>
 
+      {/* Items Section */}
       <section aria-label="Dashboard Items">
-        {isLoading && (
+        {isLoading && items.length === 0 && (
           <div
             role="status"
             style={{
               padding: '3rem',
               textAlign: 'center',
-              color: '#64748b',
+              color: theme.colors.textMuted,
               backgroundColor: '#ffffff',
-              borderRadius: '8px',
-              border: '1px solid #e2e8f0',
-              fontSize: '0.875rem',
+              borderRadius: '12px',
+              border: `1px solid ${theme.colors.border}`,
             }}
           >
-            Loading triage queue...
+            Loading triage queue…
           </div>
         )}
 
         {error && (
           <div role="alert" style={{ ...commonStyles.alertError, marginBottom: '1.5rem' }}>
-            Failed to load items
+            Failed to load queue items: {getApiErrorMessage(error)}
           </div>
         )}
 
-        {!isLoading && !error && data && data.items.length === 0 && (
+        {!isLoading && !error && items.length === 0 && (
           <div
             role="status"
-            data-testid="empty-state"
+            data-testid="empty-dashboard-state"
             style={{
-              padding: '4rem 1.5rem',
+              padding: '3rem 1.5rem',
               textAlign: 'center',
-              color: '#64748b',
-              background: '#ffffff',
-              borderRadius: '8px',
-              border: '1px dashed #cbd5e1',
+              backgroundColor: '#ffffff',
+              borderRadius: '12px',
+              border: `1px dashed ${theme.colors.borderStrong}`,
             }}
           >
-            <div style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>✓</div>
-            <div style={{ fontWeight: 600, color: '#0f172a', marginBottom: '0.25rem' }}>All clear</div>
-            <div style={{ fontSize: '0.875rem' }}>No items in this view</div>
+            <div style={{ fontWeight: 600, color: theme.colors.textPrimary, marginBottom: '0.25rem' }}>
+              No items in this view
+            </div>
+            <div style={{ color: theme.colors.textMuted, fontSize: '0.875rem' }}>
+              {activeTab === 'assigned_to_me'
+                ? 'You have no open work items assigned to your account.'
+                : activeTab === 'unassigned_urgent'
+                  ? 'All urgent items are currently assigned or in progress.'
+                  : activeTab === 'awaiting_my_approval'
+                    ? 'No submitted items are pending approval in your teams.'
+                    : 'No work items are overdue.'}
+            </div>
           </div>
         )}
 
-        {!isLoading && !error && data && data.items.length > 0 && (
+        {items.length > 0 && (
           <div
-            className="items-container"
-            data-testid="dashboard-items"
             style={{
-              border: '1px solid #e2e8f0',
-              borderRadius: '8px',
-              overflowX: 'auto',
               backgroundColor: '#ffffff',
-              boxShadow: '0 1px 3px 0 rgba(15, 23, 42, 0.04)',
+              border: `1px solid ${theme.colors.border}`,
+              borderRadius: '12px',
+              overflow: 'hidden',
+              boxShadow: theme.shadows.sm,
             }}
           >
-            <div style={{ minWidth: '640px' }}>
+            <div style={{ overflowX: 'auto' }}>
               <div
                 style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '1rem',
-                  padding: '0.625rem 1.25rem',
-                  backgroundColor: '#f8fafc',
-                  borderBottom: '1px solid #e2e8f0',
+                  display: 'grid',
+                  gridTemplateColumns: 'minmax(80px, 100px) minmax(200px, 3fr) minmax(100px, 1.2fr) minmax(90px, 1fr) minmax(130px, 1.5fr) minmax(100px, 1.2fr)',
+                  padding: '0.75rem 1rem',
+                  backgroundColor: theme.colors.bgCardMuted,
+                  borderBottom: `1px solid ${theme.colors.border}`,
                   fontSize: '0.75rem',
-                  fontWeight: 600,
-                  color: '#64748b',
+                  fontWeight: 700,
+                  color: theme.colors.textSecondary,
                   textTransform: 'uppercase',
                   letterSpacing: '0.04em',
                 }}
               >
-                <div style={{ flex: 2.5 }}>Work Item</div>
-                <div style={{ flex: 1.2 }}>Status</div>
-                <div style={{ flex: 1 }}>Priority</div>
-                <div style={{ flex: 1.2 }}>Assignee</div>
-                <div style={{ flex: 1, textAlign: 'right' }}>Due Date</div>
+                <span>ID</span>
+                <span>Title</span>
+                <span>Status</span>
+                <span>Priority</span>
+                <span>Assignee</span>
+                <span style={{ textAlign: 'right' }}>Due</span>
               </div>
 
-              {data.items.map((item) => (
-                <ItemRow key={item.id} item={item} />
-              ))}
+              <div>
+                {items.map((item) => (
+                  <ItemRow key={item.id} item={item} />
+                ))}
+              </div>
             </div>
+
+            {/* Keyset Cursor Pagination */}
+            {nextCursor && (
+              <div
+                style={{
+                  padding: '1rem',
+                  borderTop: `1px solid ${theme.colors.border}`,
+                  textAlign: 'center',
+                  backgroundColor: theme.colors.bgCardMuted,
+                }}
+              >
+                <button
+                  type="button"
+                  disabled={isFetching}
+                  onClick={() => setCursor(nextCursor)}
+                  style={{
+                    ...commonStyles.buttonSecondary,
+                    padding: '0.45rem 1.25rem',
+                    fontSize: '0.8125rem',
+                  }}
+                >
+                  {isFetching ? 'Loading more items…' : 'Load More Items'}
+                </button>
+              </div>
+            )}
           </div>
         )}
       </section>

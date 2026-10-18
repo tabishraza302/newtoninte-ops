@@ -69,8 +69,11 @@ export async function withIdempotency<T>(
   body: unknown,
   fn: (tx: Tx) => Promise<IdempotencyHandlerResult<T>>,
 ): Promise<IdempotencyResult<T>> {
-  const currentHash = requestHash(body)
+  if (!key || typeof key !== 'string' || key.trim().length === 0 || key.length > 255) {
+    throw ApiError.of('VALIDATION_ERROR', 'Idempotency key must be between 1 and 255 characters')
+  }
 
+  const currentHash = requestHash(body)
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
       return await withTransaction(async (tx) => {
@@ -85,10 +88,9 @@ export async function withIdempotency<T>(
           const isExpired = existing.expiresAt.getTime() <= now.getTime()
 
           if (!isExpired) {
-            if (existing.requestHash !== currentHash) {
+            if (existing.endpoint !== endpoint || existing.requestHash !== currentHash) {
               throw ApiError.of('IDEMPOTENCY_KEY_MISMATCH')
             }
-
             return {
               status: existing.responseStatus,
               body: existing.responseBody as T,

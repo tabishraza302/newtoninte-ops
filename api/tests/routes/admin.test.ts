@@ -117,6 +117,13 @@ const ROUTES: readonly RouteSpec[] = [
     path: '/admin/users/1',
     body: { status: 'disabled' },
   },
+  { name: 'GET /admin/users', method: 'get', path: '/admin/users' },
+  {
+    name: 'POST /admin/users',
+    method: 'post',
+    path: '/admin/users',
+    body: { email: 'admin-route-test@example.com', displayName: 'Route Test', password: 'password123' },
+  },
 ]
 
 describe('Admin routes (Task 5.2)', () => {

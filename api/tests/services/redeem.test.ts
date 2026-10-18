@@ -194,7 +194,7 @@ describe('invitations service: redeem (Task 2.10)', () => {
       invRevoked.id,
     ])
     expect(
-      await errorCode(() => redeem(null, { code: codeRev, email: 'rev@example.test', password: 'p' })),
+      await errorCode(() => redeem(null, { code: codeRev, email: 'rev@example.test', password: 'Password123!' })),
     ).toBe('INVITE_REVOKED')
 
     // 2. Expired
@@ -208,7 +208,7 @@ describe('invitations service: redeem (Task 2.10)', () => {
       [invExpired.id],
     )
     expect(
-      await errorCode(() => redeem(null, { code: codeExp, email: 'exp@example.test', password: 'p' })),
+      await errorCode(() => redeem(null, { code: codeExp, email: 'exp@example.test', password: 'Password123!' })),
     ).toBe('INVITE_EXPIRED')
 
     // 3. Exhausted
@@ -220,7 +220,81 @@ describe('invitations service: redeem (Task 2.10)', () => {
     const codeExh = await fetchOutboxInviteCode(invExhausted.id)
     await pool.query('UPDATE invitations SET uses = 1 WHERE id = ?', [invExhausted.id])
     expect(
-      await errorCode(() => redeem(null, { code: codeExh, email: 'exh@example.test', password: 'p' })),
+      await errorCode(() => redeem(null, { code: codeExh, email: 'exh@example.test', password: 'Password123!' })),
     ).toBe('INVITE_EXHAUSTED')
+  })
+
+  it('(g) rejects disabled accounts on both unauthenticated and authenticated branches', async () => {
+    const team = await seedTeam()
+    const lead = await seedUser({ email: 'lead-dis@example.test' })
+    await seedMembership(lead.id, team.id, 'lead')
+    const leadActor: Actor = { id: lead.id, isAdmin: false }
+
+    const pwHash = await hashPassword('KnownPassword123')
+    const disabledUser = await seedUser({
+      email: 'disabled-user@example.test',
+      passwordHash: pwHash,
+      status: 'disabled',
+    })
+
+    const inv = await createInvitation(leadActor, team.id, {
+      email: 'disabled-user@example.test',
+      role: 'member',
+    })
+    const code = await fetchOutboxInviteCode(inv.id)
+
+    // Unauthenticated redeem with disabled user's credentials -> FORBIDDEN
+    expect(
+      await errorCode(() =>
+        redeem(null, {
+          code,
+          email: 'disabled-user@example.test',
+          password: 'KnownPassword123',
+        }),
+      ),
+    ).toBe('FORBIDDEN')
+
+    // Authenticated redeem with disabled actor -> FORBIDDEN
+    const disabledActor: Actor = { id: disabledUser.id, isAdmin: false }
+    expect(
+      await errorCode(() =>
+        redeem(disabledActor, { code }),
+      ),
+    ).toBe('FORBIDDEN')
+  })
+
+  it('(h) validates password boundary when creating a new account during redeem', async () => {
+    const team = await seedTeam()
+    const lead = await seedUser({ email: 'lead-pw@example.test' })
+    await seedMembership(lead.id, team.id, 'lead')
+    const leadActor: Actor = { id: lead.id, isAdmin: false }
+
+    const inv = await createInvitation(leadActor, team.id, {
+      email: 'new-acc@example.test',
+      role: 'member',
+    })
+    const code = await fetchOutboxInviteCode(inv.id)
+
+    // Password < 8 characters
+    expect(
+      await errorCode(() =>
+        redeem(null, {
+          code,
+          email: 'new-acc@example.test',
+          password: 'short',
+        }),
+      ),
+    ).toBe('VALIDATION_ERROR')
+
+    // Password > 72 bytes
+    expect(
+      await errorCode(() =>
+        redeem(null, {
+          code,
+          email: 'new-acc@example.test',
+          password: 'a'.repeat(73),
+        }),
+      ),
+    ).toBe('VALIDATION_ERROR')
   })
 })

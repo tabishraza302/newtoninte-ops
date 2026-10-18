@@ -3,7 +3,7 @@ import { db } from '../db/client'
 import { memberships, membershipEvents, teams, users } from '../db/schema'
 import { withTransaction } from '../db/tx'
 import { ApiError } from '../http/errors'
-import { buildPage, decodeCursor, DEFAULT_LIMIT, MAX_LIMIT } from '../http/cursor'
+import { buildPage, decodeIdCursor, DEFAULT_LIMIT, MAX_LIMIT } from '../http/cursor'
 import { authorize, can } from '../policy'
 import type { Actor, Role } from '../domain/types'
 
@@ -40,7 +40,18 @@ export async function addMember(
   }
 
   await withTransaction(async (tx) => {
-    // Check for existing membership
+    // 1. Lock team row
+    const [team] = await tx
+      .select({ id: teams.id })
+      .from(teams)
+      .where(eq(teams.id, teamId))
+      .for('update')
+
+    if (!team) {
+      throw ApiError.of('NOT_FOUND', 'Team not found')
+    }
+
+    // 2. Check for existing membership
     const [existing] = await tx
       .select({ id: memberships.id })
       .from(memberships)
@@ -50,18 +61,6 @@ export async function addMember(
     if (existing) {
       throw ApiError.of('ALREADY_MEMBER', 'User is already a member of this team')
     }
-
-    // Check team exists
-    const [team] = await tx
-      .select({ id: teams.id })
-      .from(teams)
-      .where(eq(teams.id, teamId))
-      .limit(1)
-
-    if (!team) {
-      throw ApiError.of('NOT_FOUND', 'Team not found')
-    }
-
     // Check user exists
     const [user] = await tx
       .select({ id: users.id })
@@ -103,12 +102,12 @@ export async function listMembers(
   await authorize(actor, 'team:read', { kind: 'team', teamId })
 
   const scope = `team:${teamId}:members`
-  const decoded = decodeCursor(cursor, scope)
+  const cursorId = decodeIdCursor(cursor, scope)
   const effectiveLimit = Math.min(Math.max(1, limit ?? DEFAULT_LIMIT), MAX_LIMIT)
 
   const conditions = [eq(memberships.teamId, teamId)]
-  if (decoded && typeof decoded.id === 'number') {
-    conditions.push(gt(memberships.id, decoded.id))
+  if (cursorId !== null) {
+    conditions.push(gt(memberships.id, cursorId))
   }
 
   const rows = await db
@@ -166,6 +165,20 @@ export async function setMemberRole(
   await authorize(actor, 'membership:manage', { kind: 'team', teamId })
 
   await withTransaction(async (tx) => {
+    // 1. Lock team row to serialize membership mutations on this team
+    const [team] = await tx
+      .select({ id: teams.id })
+      .from(teams)
+      .where(eq(teams.id, teamId))
+      .for('update')
+
+    if (!team) {
+      throw ApiError.of('NOT_FOUND', 'Team not found')
+    }
+
+    // 2. Authorize actor with locked read on memberships under tx (no admin exemption)
+    await authorize(actor, 'membership:manage', { kind: 'team', teamId }, tx)
+
     const [target] = await tx
       .select()
       .from(memberships)
@@ -175,7 +188,6 @@ export async function setMemberRole(
     if (!target) {
       throw ApiError.of('NOT_FOUND', 'Member not found')
     }
-
     if (target.role === role) {
       return
     }
@@ -221,6 +233,20 @@ export async function removeMember(
   await authorize(actor, 'membership:manage', { kind: 'team', teamId })
 
   await withTransaction(async (tx) => {
+    // 1. Lock team row to serialize membership mutations on this team
+    const [team] = await tx
+      .select({ id: teams.id })
+      .from(teams)
+      .where(eq(teams.id, teamId))
+      .for('update')
+
+    if (!team) {
+      throw ApiError.of('NOT_FOUND', 'Team not found')
+    }
+
+    // 2. Authorize actor with locked read on memberships under tx (no admin exemption)
+    await authorize(actor, 'membership:manage', { kind: 'team', teamId }, tx)
+
     const [target] = await tx
       .select()
       .from(memberships)
@@ -230,7 +256,6 @@ export async function removeMember(
     if (!target) {
       throw ApiError.of('NOT_FOUND', 'Member not found')
     }
-
     if (target.role === 'lead') {
       const [leadCountRow] = await tx
         .select({ count: sql<number>`count(*)` })

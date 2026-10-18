@@ -166,5 +166,68 @@ describe('idempotency service', () => {
       expect(keyRows[0]?.response_status).toBe(200)
       expect(keyRows[0]?.expires_at.getTime()).toBeGreaterThan(Date.now())
     })
+
+    it('idempotency key exceeding 255 characters throws 422 VALIDATION_ERROR', async () => {
+      const user = await seedUser()
+      const tooLongKey = 'k'.repeat(256)
+
+      let caughtError: unknown
+      try {
+        await withIdempotency(user.id, tooLongKey, 'POST /items', { a: 1 }, async () => ({
+          status: 200,
+          body: { ok: true },
+        }))
+      } catch (e) {
+        caughtError = e
+      }
+
+      expect(caughtError).toBeInstanceOf(ApiError)
+      expect((caughtError as ApiError).code).toBe('VALIDATION_ERROR')
+      expect((caughtError as ApiError).status).toBe(422)
+    })
+
+    it('empty or whitespace-only key throws 422 VALIDATION_ERROR', async () => {
+      const user = await seedUser()
+
+      let caughtError: unknown
+      try {
+        await withIdempotency(user.id, '   ', 'POST /items', { a: 1 }, async () => ({
+          status: 200,
+          body: { ok: true },
+        }))
+      } catch (e) {
+        caughtError = e
+      }
+
+      expect(caughtError).toBeInstanceOf(ApiError)
+      expect((caughtError as ApiError).code).toBe('VALIDATION_ERROR')
+      expect((caughtError as ApiError).status).toBe(422)
+    })
+
+    it('replaying same key on a different endpoint throws 422 IDEMPOTENCY_KEY_MISMATCH', async () => {
+      const user = await seedUser()
+      const key = `key-endpoint-test-${Date.now()}`
+
+      const res1 = await withIdempotency(user.id, key, 'POST /items', { title: 'First' }, async () => ({
+        status: 201,
+        body: { id: 1 },
+      }))
+      expect(res1.status).toBe(201)
+      expect(res1.replayed).toBe(false)
+
+      let caughtError: unknown
+      try {
+        await withIdempotency(user.id, key, 'POST /other-endpoint', { title: 'First' }, async () => ({
+          status: 201,
+          body: { id: 2 },
+        }))
+      } catch (e) {
+        caughtError = e
+      }
+
+      expect(caughtError).toBeInstanceOf(ApiError)
+      expect((caughtError as ApiError).code).toBe('IDEMPOTENCY_KEY_MISMATCH')
+      expect((caughtError as ApiError).status).toBe(422)
+    })
   })
 })

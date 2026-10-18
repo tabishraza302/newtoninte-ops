@@ -161,4 +161,26 @@ describe('invitations service (part 1: create / list / revoke)', () => {
       expect('code_hash' in inv).toBe(false)
     }
   })
+
+  it('createInvitation normalizes email and enforces valid maxUses', async () => {
+    const team = await seedTeam()
+    const lead = await seedUser({ email: 'lead-norm@example.test' })
+    await seedMembership(lead.id, team.id, 'lead')
+    const leadActor: Actor = { id: lead.id, isAdmin: false }
+
+    const inv = await createInvitation(leadActor, team.id, {
+      email: '  MixedCaseInvite@Example.COM  ',
+      role: 'member',
+    })
+    expect(inv.email).toBe('mixedcaseinvite@example.com')
+
+    // Invalid maxUses
+    await expect(
+      createInvitation(leadActor, team.id, {
+        email: 'test@example.com',
+        role: 'member',
+        maxUses: 0,
+      }),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+  })
 })

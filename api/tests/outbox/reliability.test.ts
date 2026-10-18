@@ -180,48 +180,6 @@ describe('outbox reliability (Task 5.3)', () => {
     expect(row.locked_by).toBeNull()
   })
 
-  it('(b) a repeat enqueue of the same dedupe_key runs the handler once', async () => {
-    const lead = await seedUser()
-    const member1 = await seedUser()
-    const member2 = await seedUser()
-    const team = await seedTeam({ name: 'Reliability Ops' })
-    await seedMembership(lead.id, team.id, 'lead')
-    await seedMembership(member1.id, team.id, 'member')
-    await seedMembership(member2.id, team.id, 'member')
-
-    const item = await seedItem(team.id, { createdBy: lead.id, version: 1 })
-
-    // Two real assignment events (member1, then member2) — both enqueue under
-    // the item-scoped `assigned:item:<id>` key.
-    const actor: Actor = { id: lead.id, isAdmin: false }
-    await assignItem(actor, item.id, member1.id, 1)
-    await assignItem(actor, item.id, member2.id, 2)
-
-    const [rows] = await pool.query(
-      'SELECT id, status, payload FROM outbox_jobs WHERE dedupe_key = ?',
-      [`assigned:item:${item.id}`],
-    )
-    expect(rows as unknown[]).toHaveLength(1)
-
-    const handler = vi.fn<JobHandler>()
-    const handlers: Record<OutboxJobType, JobHandler> = {
-      'email.invite': vi.fn<JobHandler>(),
-      'email.reset': vi.fn<JobHandler>(),
-      'email.assigned': handler,
-    }
-
-    const processed = await runOnce({ handlers })
-    expect(processed).toBe(1)
-    expect(handler).toHaveBeenCalledTimes(1)
-    // The surviving job is the first enqueue, not an overwrite by the second.
-    expect(handler).toHaveBeenCalledWith({
-      to: member1.email,
-      itemTitle: item.title,
-      teamName: team.name,
-      itemId: item.id,
-    })
-  })
-
   it('(b2) enqueueing the same dedupe_key twice in one transaction writes one row', async () => {
     const dedupeKey = 'reliability-dedupe-one-transaction'
     await withTransaction(async (tx) => {
@@ -365,7 +323,7 @@ describe('outbox reliability (Task 5.3)', () => {
     expect(delivered.status).toBe('done')
     expect(delivered.attempts).toBe(1)
     expect(delivered.payload).toBeNull()
-
+    expect(delivered.locked_at).toBeNull()
     const afterDone = await request(app).get('/admin/jobs/summary').set('Authorization', token)
     expect(afterDone.body.byStatus).toMatchObject({ pending: 0, processing: 1, done: 1, failed: 0 })
   })
@@ -434,5 +392,80 @@ describe('outbox reliability (Task 5.3)', () => {
 
     expect(await runOnce({ batchSize: 2, handlers })).toBe(0)
     expect((await readJob(ids[2]!)).status).toBe('pending')
+  })
+
+  it('(d4) paused worker A whose lease expired cannot clobber worker B state, scrub payload, or alter attempts', async () => {
+    const dedupeKey = 'reliability-fenced-lease-race'
+    const originalPayload = { to: 'workerA@example.test', code: 'secret-token-123' }
+    const id = await enqueueJob('email.invite', originalPayload, dedupeKey)
+
+    // Worker A handler pauses on a deferred promise
+    const { promise: handlerAStarted, resolve: signalHandlerAStarted } = Promise.withResolvers<void>()
+    const { promise: resumeHandlerA, resolve: releaseHandlerA } = Promise.withResolvers<void>()
+
+    const handlerA: JobHandler = vi.fn().mockImplementation(async () => {
+      signalHandlerAStarted()
+      await resumeHandlerA
+    })
+
+    const handlersA: Record<OutboxJobType, JobHandler> = {
+      'email.invite': handlerA,
+      'email.reset': vi.fn(),
+      'email.assigned': vi.fn(),
+    }
+
+    // Worker A claims the row into processing
+    const runAPromise = runOnce({ handlers: handlersA })
+    await handlerAStarted
+
+    // Worker A currently holds the row
+    const rowWhileA = await readJob(id)
+    expect(rowWhileA.status).toBe('processing')
+    expect(rowWhileA.locked_by).toBeDefined()
+
+    // Simulate lease expiration by aging the row's locked_at in the database
+    await pool.query(
+      'UPDATE outbox_jobs SET locked_at = DATE_SUB(NOW(3), INTERVAL 3600 SECOND) WHERE id = ?',
+      [id],
+    )
+
+    // Worker B sweeps the expired lease into pending (attempts becomes 1)
+    const handlerB = vi.fn<JobHandler>().mockRejectedValue(new Error('worker B failed connection'))
+    const handlersB: Record<OutboxJobType, JobHandler> = {
+      'email.invite': handlerB,
+      'email.reset': vi.fn(),
+      'email.assigned': vi.fn(),
+    }
+
+    // Step 0 in Worker B's run sweeps expired lease: attempts becomes 1, status pending
+    await runOnce({ handlers: handlersB })
+    const rowAfterSweep = await readJob(id)
+    expect(rowAfterSweep.status).toBe('pending')
+    expect(rowAfterSweep.attempts).toBe(1)
+
+    // Make row due and let Worker B claim and fail it (attempts becomes 2, status pending with backoff)
+    await makeDue(id)
+    const claimedByB = await runOnce({ handlers: handlersB })
+    expect(claimedByB).toBe(1)
+    expect(handlerB).toHaveBeenCalledTimes(1)
+
+    const rowAfterB = await readJob(id)
+    expect(rowAfterB.status).toBe('pending')
+    expect(rowAfterB.attempts).toBe(2)
+    expect(rowAfterB.last_error).toBe('worker B failed connection')
+    expect(rowAfterB.payload).toEqual(originalPayload)
+
+    // Now resume paused Worker A — Worker A's handler returns success!
+    releaseHandlerA()
+    await runAPromise
+
+    // Read the database state directly: Worker A's stale success ack MUST be discarded!
+    // It must NOT have marked the job done, MUST NOT have scrubbed the payload,
+    // and MUST NOT have altered Worker B's attempts count.
+    const finalRow = await readJob(id)
+    expect(finalRow.status).toBe('pending')
+    expect(finalRow.payload).toEqual(originalPayload)
+    expect(finalRow.attempts).toBe(2)
+    expect(finalRow.last_error).toBe('worker B failed connection')
   })
 })

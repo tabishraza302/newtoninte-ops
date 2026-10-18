@@ -97,6 +97,12 @@ export function decodeCursor(
 ): Record<string, string | number | null> | null {
   if (cursor === undefined || cursor === '') return null
 
+  // Buffer's base64 decoder silently discards invalid characters. Reject them
+  // before decoding rather than accepting a damaged cursor as a different input.
+  if (!/^[A-Za-z0-9_-]+$/.test(cursor)) {
+    throw invalid(undefined, 'Malformed cursor')
+  }
+
   let json: string
   try {
     json = Buffer.from(cursor, 'base64url').toString('utf8')
@@ -119,6 +125,17 @@ export function decodeCursor(
   }
 
   return payload.values
+}
+
+/** Validates the positive, exact integer key used by ID-only list endpoints. */
+export function decodeIdCursor(cursor: string | undefined, scope: string): number | null {
+  const values = decodeCursor(cursor, scope)
+  if (values === null) return null
+  const id = values.id
+  if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0) {
+    throw invalid(undefined, 'Malformed cursor values')
+  }
+  return id
 }
 
 /**

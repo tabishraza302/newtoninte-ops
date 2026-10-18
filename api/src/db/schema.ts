@@ -210,8 +210,8 @@ export const activityEvents = mysqlTable(
       .references(() => workItems.id),
     actorId: bigint('actor_id', { mode: 'number', unsigned: true }).references(() => users.id),
     type: varchar('type', { length: 32 }).notNull(),
-    fromValue: varchar('from_value', { length: 255 }),
-    toValue: varchar('to_value', { length: 255 }),
+    fromValue: text('from_value'),
+    toValue: text('to_value'),
     metadata: json('metadata'),
     createdAt: datetime('created_at', { fsp: 3 })
       .notNull()

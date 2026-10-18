@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { useSearchParams, Link } from 'react-router-dom'
-import { useItems } from '../api/hooks'
+import { useItems, useTeams, useMe } from '../api/hooks'
 import {
   STATUSES,
   PRIORITIES,
@@ -12,7 +12,7 @@ import {
   type ListItemsQuery,
 } from '../api/types'
 import { ItemRow } from '../components/ItemRow'
-import { commonStyles, theme } from '../theme'
+import { commonStyles, theme, getApiErrorMessage } from '../theme'
 
 export function ItemList(): React.ReactElement {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -21,8 +21,14 @@ export function ItemList(): React.ReactElement {
   const priorityParam = searchParams.get('priority') ?? ''
   const typeParam = searchParams.get('type') ?? ''
   const qParam = searchParams.get('q') ?? ''
+  const teamParam = searchParams.get('team') ?? ''
+  const assigneeParam = searchParams.get('assignee') ?? ''
 
-  const filterKey = `${statusParam}|${priorityParam}|${typeParam}|${qParam}`
+  const { data: teamsData } = useTeams()
+  const { data: meData } = useMe()
+  const teams = teamsData?.teams ?? []
+
+  const filterKey = `${statusParam}|${priorityParam}|${typeParam}|${qParam}|${teamParam}|${assigneeParam}`
 
   const [cursor, setCursor] = useState<string | undefined>(undefined)
   const [items, setItems] = useState<WorkItem[]>([])
@@ -39,6 +45,14 @@ export function ItemList(): React.ReactElement {
   if (priorityParam) query.priority = priorityParam as Priority
   if (typeParam) query.type = typeParam as ItemType
   if (qParam) query.q = qParam
+  if (teamParam) query.team = parseInt(teamParam, 10)
+  if (assigneeParam) {
+    if (assigneeParam === 'me' && meData?.user) {
+      query.assignee = meData.user.id
+    } else if (Number.isInteger(Number(assigneeParam))) {
+      query.assignee = parseInt(assigneeParam, 10)
+    }
+  }
   if (cursor) query.cursor = cursor
 
   const { data, isLoading, isFetching, error } = useItems(query)
@@ -69,24 +83,46 @@ export function ItemList(): React.ReactElement {
     })
   }
 
+  const clearFilters = (): void => {
+    setSearchParams(new URLSearchParams())
+  }
+
+  const hasActiveFilters = Boolean(
+    statusParam || priorityParam || typeParam || qParam || teamParam || assigneeParam,
+  )
+
   const nextCursor = data?.nextCursor ?? null
 
   return (
     <div className="item-list-page" style={commonStyles.pageContainer}>
-      <header style={{ marginBottom: '1.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+      <header
+        style={{
+          marginBottom: '1.75rem',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '1rem',
+        }}
+      >
         <div>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 800, color: '#0f172a', margin: '0 0 0.35rem', letterSpacing: '-0.02em' }}>
+          <h1
+            style={{
+              fontSize: '1.75rem',
+              fontWeight: 800,
+              color: theme.colors.textPrimary,
+              margin: '0 0 0.35rem',
+              letterSpacing: '-0.02em',
+            }}
+          >
             Items
           </h1>
-          <p style={{ color: '#64748b', fontSize: '0.875rem', margin: 0 }}>
-            Browse, filter, and track all team operations work items
+          <p style={{ color: theme.colors.textMuted, fontSize: '0.875rem', margin: 0 }}>
+            Browse, filter, and track operational work items across authorized teams
           </p>
         </div>
 
-        <Link
-          to="/items/new"
-          style={commonStyles.buttonPrimary}
-        >
+        <Link to="/items/new" style={commonStyles.buttonPrimary}>
           <span style={{ fontSize: '1rem', lineHeight: 1 }}>+</span> New Item
         </Link>
       </header>
@@ -95,34 +131,59 @@ export function ItemList(): React.ReactElement {
       <div
         className="filter-bar"
         style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: '1rem',
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+          gap: '0.875rem',
           padding: '1.25rem',
           backgroundColor: '#ffffff',
-          borderRadius: '8px',
-          border: '1px solid #e2e8f0',
-          boxShadow: '0 1px 3px 0 rgba(15, 23, 42, 0.04)',
+          borderRadius: '12px',
+          border: `1px solid ${theme.colors.border}`,
+          boxShadow: theme.shadows.sm,
           marginBottom: '1.5rem',
-          alignItems: 'center',
+          alignItems: 'end',
         }}
       >
-        <div style={{ flex: '1 1 220px' }}>
+        {/* Search */}
+        <div style={{ gridColumn: 'span 2', minWidth: '220px' }}>
           <label htmlFor="search-input" style={commonStyles.label}>
-            Search
+            Search text
           </label>
           <input
             id="search-input"
             type="search"
             aria-label="Search"
-            placeholder="Search items..."
+            placeholder="Search titles and descriptions…"
             value={qParam}
             onChange={(e) => updateParam('q', e.target.value)}
             style={commonStyles.input}
           />
         </div>
 
-        <div style={{ minWidth: '160px', flex: '1 1 140px' }}>
+        {/* Team filter */}
+        {teams.length > 0 && (
+          <div>
+            <label htmlFor="team-filter" style={commonStyles.label}>
+              Team
+            </label>
+            <select
+              id="team-filter"
+              aria-label="Team"
+              value={teamParam}
+              onChange={(e) => updateParam('team', e.target.value)}
+              style={commonStyles.select}
+            >
+              <option value="">All Teams</option>
+              {teams.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* Status filter */}
+        <div>
           <label htmlFor="status-select" style={commonStyles.label}>
             Status
           </label>
@@ -142,7 +203,8 @@ export function ItemList(): React.ReactElement {
           </select>
         </div>
 
-        <div style={{ minWidth: '160px', flex: '1 1 140px' }}>
+        {/* Priority filter */}
+        <div>
           <label htmlFor="priority-select" style={commonStyles.label}>
             Priority
           </label>
@@ -156,13 +218,14 @@ export function ItemList(): React.ReactElement {
             <option value="">All Priorities</option>
             {PRIORITIES.map((p) => (
               <option key={p} value={p}>
-                {p}
+                {p.charAt(0).toUpperCase() + p.slice(1)}
               </option>
             ))}
           </select>
         </div>
 
-        <div style={{ minWidth: '160px', flex: '1 1 140px' }}>
+        {/* Type filter */}
+        <div>
           <label htmlFor="type-select" style={commonStyles.label}>
             Type
           </label>
@@ -181,6 +244,44 @@ export function ItemList(): React.ReactElement {
             ))}
           </select>
         </div>
+
+        {/* Assignee filter */}
+        <div>
+          <label htmlFor="assignee-select" style={commonStyles.label}>
+            Assignee
+          </label>
+          <select
+            id="assignee-select"
+            aria-label="Assignee"
+            value={assigneeParam}
+            onChange={(e) => updateParam('assignee', e.target.value)}
+            style={commonStyles.select}
+          >
+            <option value="">All Assignees</option>
+            {meData?.user && (
+              <option value="me">Assigned to Me ({meData.user.displayName})</option>
+            )}
+          </select>
+        </div>
+
+        {/* Reset button */}
+        {hasActiveFilters && (
+          <div>
+            <button
+              type="button"
+              onClick={clearFilters}
+              style={{
+                ...commonStyles.buttonSecondary,
+                width: '100%',
+                boxSizing: 'border-box',
+                padding: '0.55rem',
+                fontSize: '0.8125rem',
+              }}
+            >
+              Reset Filters
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Content */}
@@ -191,10 +292,10 @@ export function ItemList(): React.ReactElement {
             style={{
               padding: '3rem',
               textAlign: 'center',
-              color: '#64748b',
+              color: theme.colors.textMuted,
               backgroundColor: '#ffffff',
-              borderRadius: '8px',
-              border: '1px solid #e2e8f0',
+              borderRadius: '12px',
+              border: `1px solid ${theme.colors.border}`,
               fontSize: '0.875rem',
             }}
           >
@@ -204,7 +305,7 @@ export function ItemList(): React.ReactElement {
 
         {error && (
           <div role="alert" style={{ ...commonStyles.alertError, marginBottom: '1.5rem' }}>
-            Failed to load items
+            Failed to load items: {getApiErrorMessage(error)}
           </div>
         )}
 
@@ -215,81 +316,99 @@ export function ItemList(): React.ReactElement {
             style={{
               padding: '4rem 1.5rem',
               textAlign: 'center',
-              color: '#64748b',
+              color: theme.colors.textMuted,
               background: '#ffffff',
-              borderRadius: '8px',
-              border: '1px dashed #cbd5e1',
+              borderRadius: '12px',
+              border: `1px dashed ${theme.colors.borderStrong}`,
             }}
           >
-            <div style={{ fontWeight: 600, color: '#0f172a', marginBottom: '0.25rem', fontSize: '1rem' }}>
+            <p style={{ margin: 0, fontSize: '1rem', fontWeight: 600, color: theme.colors.textPrimary }}>
               No items found
-            </div>
-            <div style={{ fontSize: '0.875rem' }}>
-              Try adjusting your search filters or create a new work item
-            </div>
+            </p>
+            <p style={{ margin: '0.5rem 0 1.25rem', fontSize: '0.875rem' }}>
+              {hasActiveFilters ? 'Try adjusting or clearing your filter criteria.' : 'Create a work item to get started.'}
+            </p>
+            {hasActiveFilters ? (
+              <button
+                type="button"
+                onClick={clearFilters}
+                style={commonStyles.buttonSecondary}
+              >
+                Clear all filters
+              </button>
+            ) : (
+              <Link to="/items/new" style={commonStyles.buttonPrimary}>
+                Create an Item
+              </Link>
+            )}
           </div>
         )}
 
         {items.length > 0 && (
           <div
-            className="items-container"
-            data-testid="item-list"
             style={{
-              border: '1px solid #e2e8f0',
-              borderRadius: '8px',
-              overflowX: 'auto',
               backgroundColor: '#ffffff',
-              boxShadow: '0 1px 3px 0 rgba(15, 23, 42, 0.04)',
-              marginBottom: '1.5rem',
+              border: `1px solid ${theme.colors.border}`,
+              borderRadius: '12px',
+              overflow: 'hidden',
+              boxShadow: theme.shadows.sm,
             }}
           >
-            <div style={{ minWidth: '640px' }}>
+            <div style={{ overflowX: 'auto' }}>
               <div
                 style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '1rem',
-                  padding: '0.625rem 1.25rem',
-                  backgroundColor: '#f8fafc',
-                  borderBottom: '1px solid #e2e8f0',
+                  display: 'grid',
+                  gridTemplateColumns: 'minmax(80px, 100px) minmax(200px, 3fr) minmax(100px, 1.2fr) minmax(90px, 1fr) minmax(130px, 1.5fr) minmax(100px, 1.2fr)',
+                  padding: '0.75rem 1rem',
+                  backgroundColor: theme.colors.bgCardMuted,
+                  borderBottom: `1px solid ${theme.colors.border}`,
                   fontSize: '0.75rem',
-                  fontWeight: 600,
-                  color: '#64748b',
+                  fontWeight: 700,
+                  color: theme.colors.textSecondary,
                   textTransform: 'uppercase',
                   letterSpacing: '0.04em',
                 }}
               >
-                <div style={{ flex: 2.5 }}>Work Item</div>
-                <div style={{ flex: 1.2 }}>Status</div>
-                <div style={{ flex: 1 }}>Priority</div>
-                <div style={{ flex: 1.2 }}>Assignee</div>
-                <div style={{ flex: 1, textAlign: 'right' }}>Due Date</div>
+                <span>ID</span>
+                <span>Title</span>
+                <span>Status</span>
+                <span>Priority</span>
+                <span>Assignee</span>
+                <span style={{ textAlign: 'right' }}>Due</span>
               </div>
 
-              {items.map((item) => (
-                <ItemRow key={item.id} item={item} />
-              ))}
+              <div>
+                {items.map((item) => (
+                  <ItemRow key={item.id} item={item} />
+                ))}
+              </div>
             </div>
-          </div>
-        )}
 
-        {nextCursor && (
-          <div style={{ textAlign: 'center', marginTop: '1.5rem' }}>
-            <button
-              type="button"
-              onClick={() => setCursor(nextCursor)}
-              disabled={isFetching}
-              style={{
-                ...commonStyles.buttonSecondary,
-                padding: '0.65rem 1.75rem',
-                fontSize: '0.875rem',
-                fontWeight: 600,
-                cursor: isFetching ? 'not-allowed' : 'pointer',
-                opacity: isFetching ? 0.7 : 1,
-              }}
-            >
-              {isFetching ? 'Loading more...' : 'Load more'}
-            </button>
+            {/* Keyset Cursor Pagination */}
+            {nextCursor && (
+              <div
+                style={{
+                  padding: '1rem',
+                  borderTop: `1px solid ${theme.colors.border}`,
+                  textAlign: 'center',
+                  backgroundColor: theme.colors.bgCardMuted,
+                }}
+              >
+                <button
+                  type="button"
+                  data-testid="load-more-btn"
+                  disabled={isFetching}
+                  onClick={() => setCursor(nextCursor)}
+                  style={{
+                    ...commonStyles.buttonSecondary,
+                    padding: '0.45rem 1.25rem',
+                    fontSize: '0.8125rem',
+                  }}
+                >
+                  {isFetching ? 'Loading more items...' : 'Load More Items'}
+                </button>
+              </div>
+            )}
           </div>
         )}
       </section>

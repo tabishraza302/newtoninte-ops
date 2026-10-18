@@ -1,15 +1,17 @@
 import os from 'node:os'
-import { and, asc, eq, inArray, lt, lte, sql } from 'drizzle-orm'
+import { randomUUID } from 'node:crypto'
+import { and, asc, eq, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm'
 import { config } from '../config'
 import { outboxJobs } from '../db/schema'
 import { withTransaction, type Tx } from '../db/tx'
 import type { OutboxJobType } from '../domain/types'
+import { handlers as defaultHandlers } from './handlers'
 export interface OutboxWorker {
   stop(): Promise<void>
 }
 
 export type JobHandler = (payload: unknown) => Promise<void>
-const WORKER_ID = `${os.hostname()}:${process.pid}`
+const WORKER_ID = `${os.hostname().slice(0, 40)}:${process.pid}`
 
 /**
  * The `last_error` recorded when a lease expires. Only ever written to a row
@@ -108,7 +110,7 @@ export async function runOnce(opts?: {
 }): Promise<number> {
   const batchSize = opts?.batchSize ?? config.workerBatchSize ?? 10
   const leaseSec = config.workerLeaseSec ?? 300
-  const handlers = opts?.handlers
+  const handlers = opts?.handlers ?? defaultHandlers
 
   // 0. Reclaim expired leases in their own transaction, so the sweep cannot
   //    hold locks (or be rolled back) with the claim that follows it.
@@ -119,9 +121,12 @@ export async function runOnce(opts?: {
       .where(
         and(
           eq(outboxJobs.status, 'processing'),
-          lt(
-            outboxJobs.lockedAt,
-            sql`DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL ${leaseSec} SECOND)`,
+          or(
+            isNull(outboxJobs.lockedAt),
+            lt(
+              outboxJobs.lockedAt,
+              sql`DATE_SUB(CURRENT_TIMESTAMP(3), INTERVAL ${leaseSec} SECOND)`,
+            ),
           ),
         ),
       )
@@ -137,7 +142,8 @@ export async function runOnce(opts?: {
     }
   })
 
-  // 1. Atomically claim batch of pending jobs
+  // 1. Atomically claim batch of pending jobs with a unique lease token for this claim
+  const claimOwner = `${WORKER_ID.slice(0, 83)}:${randomUUID()}`
   const claimed = await withTransaction(async (tx) => {
     const jobs = await tx
       .select()
@@ -162,7 +168,7 @@ export async function runOnce(opts?: {
       .set({
         status: 'processing',
         lockedAt: sql`CURRENT_TIMESTAMP(3)`,
-        lockedBy: WORKER_ID,
+        lockedBy: claimOwner,
       })
       .where(inArray(outboxJobs.id, ids))
 
@@ -195,23 +201,52 @@ export async function runOnce(opts?: {
     }
 
     if (error === null) {
-      // Success: null out payload and mark done
+      // Fenced completion: row must still be in 'processing' and owned by this claim.
+      // If the lease expired and another worker reclaimed or retried it, discard this stale ack.
       await withTransaction(async (tx) => {
         await tx
           .update(outboxJobs)
           .set({
             status: 'done',
             payload: null,
+            lockedAt: null,
             lockedBy: null,
           })
-          .where(eq(outboxJobs.id, job.id))
+          .where(
+            and(
+              eq(outboxJobs.id, job.id),
+              eq(outboxJobs.status, 'processing'),
+              eq(outboxJobs.lockedBy, claimOwner),
+            ),
+          )
       })
     } else {
-      // Failure: retry or fail at max_attempts
+      // Fenced failure: lock the row to verify lease ownership and keep attempts current
       const errorMessage = error instanceof Error ? error.message : String(error)
 
       await withTransaction(async (tx) => {
-        await failJob(tx, job, errorMessage)
+        const [current] = await tx
+          .select({
+            id: outboxJobs.id,
+            attempts: outboxJobs.attempts,
+            maxAttempts: outboxJobs.maxAttempts,
+          })
+          .from(outboxJobs)
+          .where(
+            and(
+              eq(outboxJobs.id, job.id),
+              eq(outboxJobs.status, 'processing'),
+              eq(outboxJobs.lockedBy, claimOwner),
+            ),
+          )
+          .for('update')
+
+        if (!current) {
+          // Stale ack: lease expired and row was reclaimed or re-owned; discard stale failure
+          return
+        }
+
+        await failJob(tx, current, errorMessage)
       })
     }
   }

@@ -20,11 +20,13 @@
 services:
   mysql:
     image: mysql:8.0
+    command: ["mysqld", "--innodb-buffer-pool-size=64M", "--max_connections=50"]
+    restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: root
       MYSQL_DATABASE: newtonite
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
@@ -37,8 +39,8 @@ services:
   mailpit:
     image: axllent/mailpit
     ports:
-      - "1025:1025" # SMTP
-      - "8025:8025" # Web UI / HTTP API
+      - "127.0.0.1:1025:1025" # SMTP
+      - "127.0.0.1:8025:8025" # Web UI / HTTP API
 
   api:
     build:
@@ -60,7 +62,7 @@ services:
       SMTP_URL: smtp://mailpit:1025
       MAIL_DRIVER: mailpit
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     # Both other services wait on this, so "healthy" also means the migrations
     # and the seed have already run. Exec form: no shell, so no quoting layer.
     healthcheck:

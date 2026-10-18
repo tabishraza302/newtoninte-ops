@@ -13,6 +13,7 @@ describe('loadConfig', () => {
     expect(c.idempotencyTtlSec).toBe(86400)
     expect(c.inviteTtlDays).toBe(7)
     expect(c.mailDriver).toBe('mailpit')
+    expect(c.adminUserCreationEnabled).toBe(true)
   })
   it('rejects an unknown MAIL_DRIVER', () => {
     expect(() => loadConfig({ ...base, MAIL_DRIVER: 'smtp' })).toThrow()
@@ -36,5 +37,23 @@ describe('loadConfig', () => {
   })
   it('rejects an invalid boolean setting', () => {
     expect(() => loadConfig({ ...base, COOKIE_SECURE: 'maybe' })).toThrow()
+  })
+  it('reads ADMIN_USER_CREATION_ENABLED from the environment', () => {
+    const c = loadConfig({ ...base, ADMIN_USER_CREATION_ENABLED: 'false' })
+    expect(c.adminUserCreationEnabled).toBe(false)
+  })
+  it('strips trailing slashes from APP_BASE_URL', () => {
+    const c = loadConfig({ ...base, APP_BASE_URL: 'http://localhost:8080///' })
+    expect(c.appBaseUrl).toBe('http://localhost:8080')
+  })
+  it('rejects an invalid or non-http APP_BASE_URL', () => {
+    expect(() => loadConfig({ ...base, APP_BASE_URL: 'javascript:alert(1)' })).toThrow(/APP_BASE_URL/)
+    expect(() => loadConfig({ ...base, APP_BASE_URL: 'not-a-url' })).toThrow(/APP_BASE_URL/)
+  })
+  it('reads TRUST_PROXY from environment or applies default', () => {
+    const def = loadConfig(base)
+    expect(def.trustProxy).toBe('loopback, linklocal, uniquelocal')
+    const custom = loadConfig({ ...base, TRUST_PROXY: '10.0.0.0/8' })
+    expect(custom.trustProxy).toBe('10.0.0.0/8')
   })
 })

@@ -36,6 +36,8 @@ describe('can', () => {
     expect(await can(a(outsider.id, true), 'team:create')).toBe(true)
     expect(await can(a(outsider.id, true), 'team:listAll')).toBe(true)
     expect(await can(a(outsider.id, true), 'job:manage')).toBe(true)
+    expect(await can(a(outsider.id, true), 'user:manage')).toBe(true)
+    expect(await can(a(outsider.id), 'user:manage')).toBe(false)
     expect(await can(a(outsider.id, true), 'team:member:add', { kind: 'team', teamId: other.id })).toBe(true)
     // admin has no work-item superpowers
     expect(await can(a(outsider.id, true), 'item:read', res)).toBe(false)

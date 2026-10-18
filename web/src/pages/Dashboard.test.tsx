@@ -13,36 +13,48 @@ describe('Dashboard Page (Task 3.7)', () => {
     globalThis.fetch = fetchMock
   })
 
-  it('renders all four tab views and checks overdue tab is present', async () => {
-    fetchMock.mockResolvedValue(
-      new Response(JSON.stringify({ items: [], nextCursor: null }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    )
+  const mockTeams = [{ id: 1, name: 'Core Team', slug: 'core' }]
 
-    renderWithProviders(<Dashboard />)
+  const setupDashboardFetch = (opts: {
+    items?: WorkItem[]
+    nextCursor?: string | null
+    customItemsHandler?: (url: string) => { items: WorkItem[]; nextCursor: string | null }
+  } = {}) => {
+    fetchMock.mockImplementation((urlStr: string | URL | Request) => {
+      const url = typeof urlStr === 'string' ? urlStr : urlStr.toString()
 
-    expect(screen.getByRole('tab', { name: /Assigned to Me/i })).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: /Unassigned Urgent/i })).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: /Awaiting My Approval/i })).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: /Overdue/i })).toBeInTheDocument()
+      if (url.includes('/teams')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ teams: mockTeams }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
 
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringContaining('/items?view=assigned_to_me'),
-        expect.anything(),
+      if (url.includes('/items')) {
+        const payload = opts.customItemsHandler
+          ? opts.customItemsHandler(url)
+          : { items: opts.items ?? [], nextCursor: opts.nextCursor ?? null }
+        return Promise.resolve(
+          new Response(JSON.stringify(payload), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+
+      return Promise.resolve(
+        new Response(JSON.stringify({ error: { code: 'NOT_FOUND', message: 'Not found' } }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' },
+        }),
       )
     })
-  })
+  }
 
   it('switches tabs and issues GET /items?view=<name>', async () => {
-    fetchMock.mockResolvedValue(
-      new Response(JSON.stringify({ items: [], nextCursor: null }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    )
+    setupDashboardFetch({ items: [] })
 
     renderWithProviders(<Dashboard />)
 
@@ -85,19 +97,13 @@ describe('Dashboard Page (Task 3.7)', () => {
   })
 
   it('shows an empty state when view has no items', async () => {
-    fetchMock.mockResolvedValue(
-      new Response(JSON.stringify({ items: [], nextCursor: null }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    )
+    setupDashboardFetch({ items: [] })
 
     renderWithProviders(<Dashboard />)
 
     await waitFor(() => {
-      expect(screen.getByTestId('empty-state')).toBeInTheDocument()
+      expect(screen.getByText(/No items in this view/i)).toBeInTheDocument()
     })
-    expect(screen.getByText(/No items in this view/i)).toBeInTheDocument()
   })
 
   it('renders items in the active view', async () => {
@@ -119,12 +125,7 @@ describe('Dashboard Page (Task 3.7)', () => {
       creator: { id: 5, displayName: 'Bob Reporter', email: 'bob@example.com' },
     }
 
-    fetchMock.mockResolvedValue(
-      new Response(JSON.stringify({ items: [mockItem], nextCursor: null }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    )
+    setupDashboardFetch({ items: [mockItem] })
 
     renderWithProviders(<Dashboard />)
 
@@ -135,5 +136,65 @@ describe('Dashboard Page (Task 3.7)', () => {
     expect(screen.getByTestId('item-row-42')).toBeInTheDocument()
     expect(screen.getByText('Alice Engineer')).toBeInTheDocument()
     expect(screen.getByText('urgent')).toBeInTheDocument()
+  })
+
+  it('supports cursor pagination via Load More button', async () => {
+    const item1 = {
+      id: 1,
+      teamId: 1,
+      title: 'First Dashboard Item',
+      description: null,
+      type: 'task' as const,
+      priority: 'high' as const,
+      status: 'open' as const,
+      assigneeId: null,
+      createdBy: 1,
+      dueAt: null,
+      version: 1,
+      createdAt: '2026-10-18T10:00:00.000Z',
+      updatedAt: '2026-10-18T10:00:00.000Z',
+    }
+    const item2 = {
+      id: 2,
+      teamId: 1,
+      title: 'Second Dashboard Item',
+      description: null,
+      type: 'task' as const,
+      priority: 'medium' as const,
+      status: 'open' as const,
+      assigneeId: null,
+      createdBy: 1,
+      dueAt: null,
+      version: 1,
+      createdAt: '2026-10-18T10:05:00.000Z',
+      updatedAt: '2026-10-18T10:05:00.000Z',
+    }
+
+    setupDashboardFetch({
+      customItemsHandler: (url) => {
+        if (url.includes('cursor=page2-token')) {
+          return { items: [item2], nextCursor: null }
+        }
+        return { items: [item1], nextCursor: 'page2-token' }
+      },
+    })
+
+    renderWithProviders(<Dashboard />)
+
+    await waitFor(() => {
+      expect(screen.getByText('First Dashboard Item')).toBeInTheDocument()
+    })
+
+    const loadMoreBtn = screen.getByRole('button', { name: /Load More Items/i })
+    expect(loadMoreBtn).toBeInTheDocument()
+
+    fireEvent.click(loadMoreBtn)
+
+    await waitFor(() => {
+      expect(screen.getByText('Second Dashboard Item')).toBeInTheDocument()
+    })
+
+    expect(screen.getByText('First Dashboard Item')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Load More Items/i })).not.toBeInTheDocument()
   })
 })

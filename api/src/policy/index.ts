@@ -1,6 +1,7 @@
 import { ApiError } from '../http/errors'
 import { and, eq } from 'drizzle-orm'
 import { db } from '../db/client'
+import type { Tx } from '../db/tx'
 import { memberships } from '../db/schema'
 import type { Actor, Role } from '../domain/types'
 
@@ -14,12 +15,15 @@ export type { Actor } from '../domain/types'
  * The role `userId` holds on `teamId`, read from `memberships`.
  * Returns `null` when the user is not a member of that team.
  */
-export async function roleIn(userId: number, teamId: number): Promise<Role | null> {
-  const [row] = await db
+export async function roleIn(userId: number, teamId: number, executor: Tx | typeof db = db): Promise<Role | null> {
+  const query = executor
     .select({ role: memberships.role })
     .from(memberships)
     .where(and(eq(memberships.userId, userId), eq(memberships.teamId, teamId)))
     .limit(1)
+  // Transactional writes must hold the role stable through commit. A locking
+  // read also avoids an earlier REPEATABLE READ snapshot granting a stale role.
+  const [row] = await (executor === db ? query : query.for('share'))
   return row?.role ?? null
 }
 
@@ -44,6 +48,7 @@ export type Action =
   | 'item:claim' | 'item:assign' | 'item:submit' | 'item:sendBack' | 'item:approve'
   | 'item:close' | 'item:reopen' | 'item:cancel'
   | 'invitation:manage' | 'membership:manage' | 'job:manage'
+  | 'user:manage'
 
 export type ItemResource = { kind: 'item'; teamId: number; creatorId: number; assigneeId: number | null }
 export type TeamResource = { kind: 'team'; teamId: number }
@@ -57,6 +62,7 @@ export async function can(
   actor: Actor,
   action: Action,
   resource?: ItemResource | TeamResource,
+  executor: Tx | typeof db = db,
 ): Promise<boolean> {
   switch (action) {
     // Admin-only — true on `isAdmin` alone, team membership ignored (§7.1).
@@ -64,11 +70,12 @@ export async function can(
     case 'team:listAll':
     case 'team:member:add':
     case 'job:manage':
+    case 'user:manage':
       return actor.isAdmin
   }
 
   if (resource === undefined) return false
-  const role = await roleIn(actor.id, resource.teamId)
+  const role = await roleIn(actor.id, resource.teamId, executor)
 
   switch (action) {
     // Any membership role may read.
@@ -124,11 +131,12 @@ export async function authorize(
   actor: Actor,
   action: Action,
   resource: ItemResource | TeamResource,
+  executor: Tx | typeof db = db,
 ): Promise<void> {
-  const allowed = await can(actor, action, resource)
+  const allowed = await can(actor, action, resource, executor)
   if (allowed) return
 
-  const role = await roleIn(actor.id, resource.teamId)
+  const role = await roleIn(actor.id, resource.teamId, executor)
   if (role === null) {
     throw ApiError.of('NOT_FOUND')
   }

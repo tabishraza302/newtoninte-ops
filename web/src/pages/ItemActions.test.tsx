@@ -410,13 +410,18 @@ describe('ItemActions & Optimistic Rollback (Task 4.13)', () => {
       ),
     )
 
-    // UI rolls back to open and displays server error message
+    // UI rolls back to open and displays conflict / reload banner
     await waitFor(() => {
       expect(screen.getByTestId('item-status')).toHaveTextContent('open')
       expect(screen.getByTestId('item-assignee')).toHaveTextContent('Unassigned')
-      expect(screen.getByTestId('action-error')).toHaveTextContent(
-        'Item has already been claimed by someone else',
-      )
+      expect(screen.getByRole('alert')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /reload item/i })).toBeInTheDocument()
+    })
+
+    // Explicit reload recovery clears conflict and re-fetches latest item
+    fireEvent.click(screen.getByRole('button', { name: /reload item/i }))
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     })
   })
 
@@ -495,12 +500,17 @@ describe('ItemActions & Optimistic Rollback (Task 4.13)', () => {
       ),
     )
 
-    // UI rolls back to in progress and displays server error message
+    // UI rolls back to in progress and displays conflict / reload banner
     await waitFor(() => {
       expect(screen.getByTestId('item-status')).toHaveTextContent('in progress')
-      expect(screen.getByTestId('action-error')).toHaveTextContent(
-        'Item status changed before transition could complete',
-      )
+      expect(screen.getByRole('alert')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /reload item/i })).toBeInTheDocument()
+    })
+
+    // Explicit reload recovery clears conflict and re-fetches latest item
+    fireEvent.click(screen.getByRole('button', { name: /reload item/i }))
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     })
   })
 })

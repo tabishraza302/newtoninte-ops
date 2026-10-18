@@ -350,4 +350,88 @@ describe('items service - patchItem (Task 4.4)', () => {
     expect(caughtError).toBeInstanceOf(ApiError)
     expect((caughtError as ApiError).code).toBe('NOT_FOUND')
   })
+
+  it('long description edit (>255 chars) succeeds, records full description_changed event, and clears to null', async () => {
+    const lead = await seedUser()
+    const team = await seedTeam()
+    await seedMembership(lead.id, team.id, 'lead')
+
+    const item = await seedItem(team.id, {
+      createdBy: lead.id,
+      title: 'Initial item',
+      description: 'Initial short description',
+      version: 1,
+    })
+
+    const actor: Actor = { id: lead.id, isAdmin: false }
+    const longDescription = 'Detailed operational incident report section. '.repeat(15) // ~690 chars > 255
+
+    const updated = await patchItem(actor, item.id, {
+      description: longDescription,
+      version: 1,
+    })
+
+    expect(updated.description).toBe(longDescription)
+    expect(updated.version).toBe(2)
+
+    // Check event in activity_events
+    const events = await db
+      .select()
+      .from(activityEvents)
+      .where(eq(activityEvents.workItemId, item.id))
+
+    const descEvent = events.find((e) => e.type === 'description_changed')
+    expect(descEvent).toBeDefined()
+    expect(descEvent?.fromValue).toBe('Initial short description')
+    expect(descEvent?.toValue).toBe(longDescription)
+
+    // Clear description to null
+    const cleared = await patchItem(actor, item.id, {
+      description: null,
+      version: 2,
+    })
+
+    expect(cleared.description).toBeNull()
+    expect(cleared.version).toBe(3)
+
+    const eventsAfterClear = await db
+      .select()
+      .from(activityEvents)
+      .where(eq(activityEvents.workItemId, item.id))
+
+    const clearEvent = eventsAfterClear.find((e) => e.type === 'description_changed' && e.toValue === null)
+    expect(clearEvent).toBeDefined()
+    expect(clearEvent?.fromValue).toBe(longDescription)
+    expect(clearEvent?.toValue).toBeNull()
+  })
+
+  it('description exceeding 65,535 bytes throws 422 VALIDATION_ERROR', async () => {
+    const lead = await seedUser()
+    const team = await seedTeam()
+    await seedMembership(lead.id, team.id, 'lead')
+
+    const item = await seedItem(team.id, {
+      createdBy: lead.id,
+      title: 'Valid item',
+      version: 1,
+    })
+
+    const actor: Actor = { id: lead.id, isAdmin: false }
+    // 20,000 4-byte emojis = 80,000 bytes > 65,535 bytes
+    const oversizedEmojiDesc = '🚀'.repeat(20000)
+
+    let caughtError: unknown
+    try {
+      await patchItem(actor, item.id, {
+        description: oversizedEmojiDesc,
+        version: 1,
+      })
+    } catch (e) {
+      caughtError = e
+    }
+
+    expect(caughtError).toBeInstanceOf(ApiError)
+    expect((caughtError as ApiError).code).toBe('VALIDATION_ERROR')
+    expect((caughtError as ApiError).status).toBe(422)
+  })
 })

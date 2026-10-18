@@ -25,6 +25,8 @@ export type ErrorCode =
   | 'INVITE_REVOKED'
   | 'RATE_LIMITED'
   | 'INTERNAL_ERROR'
+  | 'USER_CREATION_DISABLED'
+  | 'EMAIL_TAKEN'
 
 /**
  * Code -> HTTP status, verbatim from the plan's Global Constraints table.
@@ -48,6 +50,8 @@ export const ERROR_STATUS: Record<ErrorCode, number> = {
   INVITE_REVOKED: 409,
   RATE_LIMITED: 429,
   INTERNAL_ERROR: 500,
+  USER_CREATION_DISABLED: 403,
+  EMAIL_TAKEN: 409,
 }
 
 /**
@@ -71,6 +75,8 @@ const DEFAULT_MESSAGES: Record<ErrorCode, string> = {
   INVITE_REVOKED: 'Invite revoked',
   RATE_LIMITED: 'Too many requests',
   INTERNAL_ERROR: 'Internal server error',
+  USER_CREATION_DISABLED: 'User creation is disabled',
+  EMAIL_TAKEN: 'Email already taken',
 }
 
 /**
@@ -120,6 +126,39 @@ export function toEnvelope(err: unknown): {
     }
   }
 
+  // Express / body-parser syntax error on malformed JSON payload (client error, not 500)
+  if (err && typeof err === 'object') {
+    const status = 'status' in err ? err.status : undefined
+    const type = 'type' in err ? err.type : undefined
+
+    if (
+      (err instanceof SyntaxError && status === 400) ||
+      type === 'entity.parse.failed'
+    ) {
+      return {
+        status: ERROR_STATUS.VALIDATION_ERROR,
+        body: {
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Malformed JSON payload',
+          },
+        },
+      }
+    }
+
+    // Express / body-parser payload too large
+    if (status === 413 || type === 'entity.too.large') {
+      return {
+        status: 413,
+        body: {
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Payload too large',
+          },
+        },
+      }
+    }
+  }
   return {
     status: ERROR_STATUS.INTERNAL_ERROR,
     body: {

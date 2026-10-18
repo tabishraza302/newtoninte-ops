@@ -120,6 +120,19 @@ describe('auth service', () => {
       const res = await login('  MixedCase@Example.COM  ', password)
       expect(res.user.id).toBe(seeded.id)
     })
+
+    it('throws UNAUTHENTICATED when password exceeds 72 bytes', async () => {
+      const password = 'SuperSecretPassword123!'
+      const passwordHash = await hashPassword(password)
+      await seedUser({
+        email: 'longpw@example.com',
+        passwordHash,
+      })
+
+      await expect(login('longpw@example.com', 'a'.repeat(73))).rejects.toMatchObject({
+        code: 'UNAUTHENTICATED',
+      })
+    })
   })
 
   describe('logout', () => {

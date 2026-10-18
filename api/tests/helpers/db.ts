@@ -36,8 +36,13 @@ export async function resetDb(): Promise<void> {
     for (const table of TABLES) {
       await conn.query(`TRUNCATE TABLE \`${table}\``)
     }
-    await conn.query('SET FOREIGN_KEY_CHECKS = 1')
   } finally {
-    conn.release()
+    try {
+      await conn.query('SET FOREIGN_KEY_CHECKS = 1')
+      conn.release()
+    } catch (error) {
+      conn.destroy()
+      throw error
+    }
   }
 }

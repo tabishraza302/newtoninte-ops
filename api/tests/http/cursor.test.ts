@@ -57,6 +57,13 @@ describe('cursor hardening', () => {
     expectValidationError(() => decodeCursor(encode(JSON.stringify({ scope: 'x' }))))
   })
 
+  it('rejects non-base64url characters appended to an otherwise valid cursor', () => {
+    const cursor = encodeCursor({ id: 7 }, 'items')
+    for (const suffix of ['!!!', '\n', ' ', '=']) {
+      expectValidationError(() => decodeCursor(cursor + suffix, 'items'))
+    }
+  })
+
   it('rejects a cursor replayed under a different scope', () => {
     const cursor = encodeCursor({ id: 7, priority: 'high' }, 'team=3;view=overdue')
     // Same scope: accepted.

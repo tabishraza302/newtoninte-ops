@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { screen, waitFor, fireEvent } from '@testing-library/react'
 import { Routes, Route } from 'react-router-dom'
 import { renderWithProviders } from '../test/test-utils'
 import { ItemDetail } from './ItemDetail'
@@ -199,5 +199,255 @@ describe('ItemDetail Page (Task 3.9)', () => {
 
     expect(screen.getByTestId('not-found')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: /Item not found/i })).toBeInTheDocument()
+  })
+
+  it('submits a new comment and updates discussion', async () => {
+    let postedComment: unknown = null
+    fetchMock.mockImplementation((urlStr: string | URL | Request, init?: RequestInit) => {
+      const url = typeof urlStr === 'string' ? urlStr : urlStr.toString()
+      if (url.includes('/items/42/comments') && init?.method === 'POST') {
+        if (init?.body) {
+          postedComment = JSON.parse(init.body as string)
+        }
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              comment: {
+                id: 99,
+                workItemId: 42,
+                authorId: 5,
+                body: 'Investigating third-party gateway latency.',
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              },
+            }),
+            { status: 201, headers: { 'Content-Type': 'application/json' } },
+          ),
+        )
+      }
+      if (url.includes('/items/42/activity')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ events: mockEvents, nextCursor: null }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      if (url.includes('/items/42')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ item: mockItem }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }))
+    })
+
+    renderWithProviders(
+      <Routes>
+        <Route path="/items/:id" element={<ItemDetail userRole="member" />} />
+      </Routes>,
+      { route: '/items/42' },
+    )
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Add a comment/i)).toBeInTheDocument()
+    })
+
+    const commentInput = screen.getByLabelText(/Add a comment/i)
+    fireEvent.change(commentInput, {
+      target: { value: 'Investigating third-party gateway latency.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Post Comment/i }))
+
+    await waitFor(() => {
+      expect(postedComment).toEqual({ body: 'Investigating third-party gateway latency.' })
+    })
+  })
+
+  it('lets the current member assignee start an assigned open item', async () => {
+    const assignedOpenItem: WorkItem = { ...mockItem, status: 'open' }
+    fetchMock.mockImplementation((input: string | URL | Request) => {
+      const url = String(input)
+      if (url.includes('/items/42/activity')) {
+        return Promise.resolve(new Response(JSON.stringify({ events: [], nextCursor: null }), { status: 200 }))
+      }
+      if (url.includes('/teams/1/members')) {
+        return Promise.resolve(new Response(JSON.stringify({ members: [], nextCursor: null }), { status: 200 }))
+      }
+      if (url.includes('/items/42')) {
+        return Promise.resolve(new Response(JSON.stringify({ item: assignedOpenItem }), { status: 200 }))
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }))
+    })
+    renderWithProviders(
+      <Routes>
+        <Route path="/items/:id" element={
+          <ItemDetail
+            userRole="member"
+            currentUser={{ id: 10, displayName: 'Charlie Engineer', email: 'charlie@example.com' }}
+          />
+        } />
+      </Routes>,
+      { route: '/items/42' },
+    )
+    expect(await screen.findByRole('button', { name: 'Start work' })).toBeEnabled()
+    expect(screen.queryByRole('button', { name: 'Claim' })).not.toBeInTheDocument()
+  })
+
+  it('hides Start work and Claim for viewers on assigned open items', async () => {
+    const assignedOpenItem: WorkItem = { ...mockItem, status: 'open' }
+    fetchMock.mockImplementation((input: string | URL | Request) => {
+      const url = String(input)
+      if (url.includes('/items/42/activity')) {
+        return Promise.resolve(new Response(JSON.stringify({ events: [], nextCursor: null }), { status: 200 }))
+      }
+      if (url.includes('/teams/1/members')) {
+        return Promise.resolve(new Response(JSON.stringify({ members: [], nextCursor: null }), { status: 200 }))
+      }
+      if (url.includes('/items/42')) {
+        return Promise.resolve(new Response(JSON.stringify({ item: assignedOpenItem }), { status: 200 }))
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }))
+    })
+    renderWithProviders(
+      <Routes>
+        <Route path="/items/:id" element={
+          <ItemDetail
+            userRole="viewer"
+            currentUser={{ id: 10, displayName: 'Charlie Engineer', email: 'charlie@example.com' }}
+          />
+        } />
+      </Routes>,
+      { route: '/items/42' },
+    )
+    await screen.findByRole('heading', { name: mockItem.title })
+    expect(screen.queryByRole('button', { name: 'Start work' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Claim' })).not.toBeInTheDocument()
+  })
+
+  it('hides Start work for other team members who are not the assignee', async () => {
+    const assignedOpenItem: WorkItem = { ...mockItem, status: 'open', assigneeId: 10 }
+    fetchMock.mockImplementation((input: string | URL | Request) => {
+      const url = String(input)
+      if (url.includes('/items/42/activity')) {
+        return Promise.resolve(new Response(JSON.stringify({ events: [], nextCursor: null }), { status: 200 }))
+      }
+      if (url.includes('/teams/1/members')) {
+        return Promise.resolve(new Response(JSON.stringify({ members: [], nextCursor: null }), { status: 200 }))
+      }
+      if (url.includes('/items/42')) {
+        return Promise.resolve(new Response(JSON.stringify({ item: assignedOpenItem }), { status: 200 }))
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }))
+    })
+    renderWithProviders(
+      <Routes>
+        <Route path="/items/:id" element={
+          <ItemDetail
+            userRole="member"
+            currentUser={{ id: 99, displayName: 'Other Member', email: 'other@example.com' }}
+          />
+        } />
+      </Routes>,
+      { route: '/items/42' },
+    )
+    await screen.findByRole('heading', { name: mockItem.title })
+    expect(screen.queryByRole('button', { name: 'Start work' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Claim' })).not.toBeInTheDocument()
+  })
+
+  it('allows lead to start an assigned open item and dispatches transition with optional reason', async () => {
+    const assignedOpenItem: WorkItem = { ...mockItem, status: 'open', assigneeId: 10 }
+    let transitionPayload: unknown = null
+    fetchMock.mockImplementation((input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes('/items/42/transition') && init?.method === 'POST') {
+        transitionPayload = JSON.parse(String(init.body))
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ item: { ...assignedOpenItem, status: 'in_progress' } }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          ),
+        )
+      }
+      if (url.includes('/items/42/activity')) {
+        return Promise.resolve(new Response(JSON.stringify({ events: [], nextCursor: null }), { status: 200 }))
+      }
+      if (url.includes('/teams/1/members')) {
+        return Promise.resolve(new Response(JSON.stringify({ members: [], nextCursor: null }), { status: 200 }))
+      }
+      if (url.includes('/items/42')) {
+        return Promise.resolve(new Response(JSON.stringify({ item: assignedOpenItem }), { status: 200 }))
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }))
+    })
+    renderWithProviders(
+      <Routes>
+        <Route path="/items/:id" element={
+          <ItemDetail
+            userRole="lead"
+            currentUser={{ id: 5, displayName: 'Dana Lead', email: 'dana@example.com' }}
+          />
+        } />
+      </Routes>,
+      { route: '/items/42' },
+    )
+    const startBtn = await screen.findByRole('button', { name: 'Start work' })
+    expect(startBtn).toBeEnabled()
+
+    const reasonInput = screen.getByPlaceholderText(/Transition reason \(optional\)/i)
+    fireEvent.change(reasonInput, { target: { value: 'Beginning triage investigation' } })
+    fireEvent.click(startBtn)
+
+    await waitFor(() => {
+      expect(transitionPayload).toEqual({
+        to: 'in_progress',
+        reason: 'Beginning triage investigation',
+      })
+    })
+  })
+
+  it('forbids terminal lifecycle changes on closed items while keeping lead assignment and edit available', async () => {
+    const closedItem: WorkItem = { ...mockItem, status: 'closed' }
+    fetchMock.mockImplementation((input: string | URL | Request) => {
+      const url = String(input)
+      if (url.includes('/items/42/activity')) {
+        return Promise.resolve(new Response(JSON.stringify({ events: [], nextCursor: null }), { status: 200 }))
+      }
+      if (url.includes('/teams/1/members')) {
+        return Promise.resolve(new Response(JSON.stringify({ members: [], nextCursor: null }), { status: 200 }))
+      }
+      if (url.includes('/items/42')) {
+        return Promise.resolve(new Response(JSON.stringify({ item: closedItem }), { status: 200 }))
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }))
+    })
+    renderWithProviders(
+      <Routes>
+        <Route path="/items/:id" element={
+          <ItemDetail
+            userRole="lead"
+            currentUser={{ id: 5, displayName: 'Dana Lead', email: 'dana@example.com' }}
+          />
+        } />
+      </Routes>,
+      { route: '/items/42' },
+    )
+    await screen.findByRole('heading', { name: mockItem.title })
+    // Terminal lifecycle changes are forbidden
+    expect(screen.queryByRole('button', { name: 'Start work' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Claim' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Submit for Approval' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Send Back' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Close' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Reopen' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument()
+
+    // Assignment and edit remain available for lead
+    expect(screen.getByRole('button', { name: 'Assign' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeEnabled()
   })
 })

@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { ApiError } from '../api/client'
-import { useCreateItem, usePatchItem } from '../api/hooks'
+import { useCreateItem, usePatchItem, useInfiniteTeamMembers } from '../api/hooks'
+import { useOptionalAuth } from '../auth/AuthContext'
 import {
   ITEM_TYPES,
   PRIORITIES,
@@ -11,8 +12,7 @@ import {
   type Role,
   type WorkItem,
 } from '../api/types'
-import { commonStyles } from '../theme'
-
+import { commonStyles, theme, getApiErrorMessage } from '../theme'
 export interface ItemFormProps {
   item?: WorkItem
   teamId?: number
@@ -68,6 +68,8 @@ export function ItemForm({
 }: ItemFormProps): React.ReactElement {
   const isEditing = !!item
   const isMember = userRole === 'member'
+  const auth = useOptionalAuth()
+  const currentUser = auth?.user
 
   const [stableIdempotencyKey] = useState<string>(() => propKey ?? generateIdempotencyKey())
 
@@ -76,10 +78,13 @@ export function ItemForm({
   const [type, setType] = useState<ItemType>(item?.type ?? 'task')
   const [priority, setPriority] = useState<Priority>(item?.priority ?? 'medium')
   const [dueDate, setDueDate] = useState(item?.dueAt ? item.dueAt.slice(0, 10) : '')
+  const [selectedAssigneeId, setSelectedAssigneeId] = useState<number | null>(item?.assigneeId ?? null)
+
+  const teamMembersQuery = useInfiniteTeamMembers(teamId, { limit: 20, enabled: !isEditing && !isMember })
+  const teamMembers = teamMembersQuery.data?.pages.flatMap((page) => page.members) ?? []
 
   const [versionConflict, setVersionConflict] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
-
   const createMutation = useCreateItem()
   const patchMutation = usePatchItem()
 
@@ -132,11 +137,9 @@ export function ItemForm({
         title,
         description: description || null,
         type,
+        priority: isMember ? 'medium' : priority,
         dueAt: dueDate ? new Date(dueDate).toISOString() : null,
-      }
-
-      if (!isMember) {
-        createData.priority = priority
+        assigneeId: selectedAssigneeId,
       }
 
       try {
@@ -146,7 +149,7 @@ export function ItemForm({
         })
         onSuccess?.(res.item)
       } catch (err) {
-        setErrorMessage(parseErrorMessage(err))
+        setErrorMessage(getApiErrorMessage(err, 'Failed to create work item.'))
       }
     }
   }
@@ -247,13 +250,13 @@ export function ItemForm({
         />
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: isMember ? '1fr 1fr' : '1fr 1fr 1fr', gap: '1rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1rem' }}>
         <div>
           <label
             htmlFor="item-type"
             style={commonStyles.label}
           >
-            Type
+            Type *
           </label>
           <select
             id="item-type"
@@ -270,14 +273,27 @@ export function ItemForm({
           </select>
         </div>
 
-        {!isMember && (
-          <div>
-            <label
-              htmlFor="item-priority"
-              style={commonStyles.label}
-            >
-              Priority
-            </label>
+        <div>
+          <label
+            htmlFor="item-priority"
+            style={commonStyles.label}
+          >
+            Priority {isMember && <span style={{ fontWeight: 400, color: theme.colors.textMuted }}>(Lead only)</span>}
+          </label>
+          {isMember ? (
+            <div>
+              <input
+                type="text"
+                readOnly
+                disabled
+                value={isEditing ? item.priority : 'medium (default)'}
+                style={{ ...commonStyles.input, backgroundColor: theme.colors.bgCardMuted, cursor: 'not-allowed' }}
+              />
+              <span style={{ fontSize: '0.75rem', color: theme.colors.textMuted, display: 'block', marginTop: '0.25rem' }}>
+                Priority can only be modified by a team lead.
+              </span>
+            </div>
+          ) : (
             <select
               id="item-priority"
               name="priority"
@@ -287,13 +303,77 @@ export function ItemForm({
             >
               {PRIORITIES.map((p) => (
                 <option key={p} value={p}>
-                  {p}
+                  {p.charAt(0).toUpperCase() + p.slice(1)}
                 </option>
               ))}
             </select>
+          )}
+        </div>
+
+        {!isEditing && (
+          <div>
+            <label htmlFor="item-assignee" style={commonStyles.label}>
+              Assignee
+            </label>
+            {isMember ? (
+              <select
+                id="item-assignee"
+                name="assigneeId"
+                value={selectedAssigneeId ?? ''}
+                onChange={(e) => setSelectedAssigneeId(e.target.value ? Number(e.target.value) : null)}
+                style={commonStyles.select}
+              >
+                <option value="">Unassigned</option>
+                {currentUser && (
+                  <option value={currentUser.id}>Assign to myself ({currentUser.displayName})</option>
+                )}
+              </select>
+            ) : (
+              <select
+                id="item-assignee"
+                name="assigneeId"
+                value={selectedAssigneeId ?? ''}
+                onChange={(e) => setSelectedAssigneeId(e.target.value ? Number(e.target.value) : null)}
+                style={commonStyles.select}
+              >
+                <option value="">Unassigned</option>
+                {teamMembers.map((m) => (
+                  <option key={m.userId} value={m.userId}>
+                    {m.user.displayName} ({m.role})
+                  </option>
+                ))}
+              </select>
+            )}
+            {!isMember && teamMembersQuery.hasNextPage && (
+              <button
+                type="button"
+                onClick={() => void teamMembersQuery.fetchNextPage()}
+                disabled={teamMembersQuery.isFetchingNextPage}
+                style={{
+                  ...commonStyles.buttonSecondary,
+                  marginTop: '0.4rem',
+                  padding: '0.25rem 0.5rem',
+                  fontSize: '0.75rem',
+                  width: '100%',
+                }}
+              >
+                {teamMembersQuery.isFetchingNextPage ? 'Loading more members…' : 'Load more members'}
+              </button>
+            )}
+            {!isMember && teamMembersQuery.isError && (
+              <div style={{ marginTop: '0.4rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: '0.75rem', color: '#dc2626' }}>Failed to load members.</span>
+                <button
+                  type="button"
+                  onClick={() => void teamMembersQuery.refetch()}
+                  style={{ ...commonStyles.buttonSecondary, padding: '0.2rem 0.4rem', fontSize: '0.75rem' }}
+                >
+                  Retry
+                </button>
+              </div>
+            )}
           </div>
         )}
-
         <div>
           <label
             htmlFor="item-due-date"

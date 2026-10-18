@@ -153,4 +153,16 @@ describe('sessions service (Task 2.11)', () => {
     )
     expect((rows as { activeCount: number }[])[0]?.activeCount).toBe(0)
   })
+
+  it('rotate refuses disabled user with UNAUTHENTICATED and revokes active tokens', async () => {
+    const user = await seedUser({ status: 'active' })
+    const { refreshToken: t1, familyId } = await issueFamily(user.id)
+
+    await pool.query('UPDATE users SET status = "disabled" WHERE id = ?', [user.id])
+
+    expect(await errorCode(() => rotate(t1))).toBe('UNAUTHENTICATED')
+
+    const tokens = await fetchTokens(familyId)
+    expect(tokens.every((t) => t.revoked_at !== null)).toBe(true)
+  })
 })

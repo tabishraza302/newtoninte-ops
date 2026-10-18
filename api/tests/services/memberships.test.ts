@@ -8,6 +8,7 @@ import {
   removeMember,
 } from '../../src/services/memberships'
 import { ApiError } from '../../src/http/errors'
+import { encodeCursor } from '../../src/http/cursor'
 import type { Actor } from '../../src/domain/types'
 
 interface MembershipEventRow {
@@ -168,5 +169,70 @@ describe('memberships service', () => {
     expect(page2.members).toHaveLength(1)
     expect(page2.nextCursor).toBeNull()
     expect(page2.members[0]?.user?.displayName).toBe('User Two')
+  })
+
+  it('prevents last lead race on concurrent demotions so at least one lead remains', async () => {
+    const team = await seedTeam()
+    const lead1 = await seedUser({ email: 'lead1-race@example.test' })
+    const lead2 = await seedUser({ email: 'lead2-race@example.test' })
+    await seedMembership(lead1.id, team.id, 'lead')
+    await seedMembership(lead2.id, team.id, 'lead')
+
+    const actor1: Actor = { id: lead1.id, isAdmin: false }
+    const actor2: Actor = { id: lead2.id, isAdmin: false }
+
+    // Both leads concurrently attempt to demote each other to member
+    const results = await Promise.allSettled([
+      setMemberRole(actor1, team.id, lead2.id, 'member'),
+      setMemberRole(actor2, team.id, lead1.id, 'member'),
+    ])
+
+    const fulfilled = results.filter((r) => r.status === 'fulfilled')
+    const rejected = results.filter((r) => r.status === 'rejected')
+
+    expect(fulfilled).toHaveLength(1)
+    expect(rejected).toHaveLength(1)
+    expect((rejected[0] as PromiseRejectedResult).reason).toMatchObject({
+      code: 'FORBIDDEN',
+    })
+
+    // Exactly one lead remains
+    const [leadRows] = await pool.query(
+      'SELECT COUNT(*) as count FROM memberships WHERE team_id = ? AND role = "lead"',
+      [team.id],
+    )
+    expect((leadRows as { count: number }[])[0]?.count).toBe(1)
+  })
+
+  it('rejects malformed member keysets instead of silently repeating the first page', async () => {
+    const lead = await seedUser()
+    const team = await seedTeam()
+    await seedMembership(lead.id, team.id, 'lead')
+    const actor: Actor = { id: lead.id, isAdmin: false }
+    for (const values of [{ wrongKey: 1 }, { id: '1' }, { id: 1.5 }, { id: -1 }, { id: Number.MAX_SAFE_INTEGER + 1 }]) {
+      const cursor = encodeCursor(values, `team:${team.id}:members`)
+      await expect(listMembers(actor, team.id, cursor)).rejects.toMatchObject({
+        code: 'VALIDATION_ERROR',
+        status: 422,
+      })
+    }
+  })
+
+  it('enforces lead requirement for admins on membership:manage (no admin bypass, R9 404/403)', async () => {
+    const team = await seedTeam()
+    const adminUser = await seedUser({ email: 'admin-lead@example.test', isAdmin: true })
+    const targetUser = await seedUser({ email: 'target-mem@example.test' })
+    const soleLead = await seedUser({ email: 'sole-lead@example.test' })
+    await seedMembership(soleLead.id, team.id, 'lead')
+    await seedMembership(targetUser.id, team.id, 'viewer')
+
+    const adminActor: Actor = { id: adminUser.id, isAdmin: true }
+
+    // Admin with no membership on team -> 404 NOT_FOUND per R9
+    expect(await errorCode(() => setMemberRole(adminActor, team.id, targetUser.id, 'member'))).toBe('NOT_FOUND')
+
+    // Admin as viewer on team -> 403 FORBIDDEN
+    await seedMembership(adminUser.id, team.id, 'viewer')
+    expect(await errorCode(() => setMemberRole(adminActor, team.id, targetUser.id, 'member'))).toBe('FORBIDDEN')
   })
 })

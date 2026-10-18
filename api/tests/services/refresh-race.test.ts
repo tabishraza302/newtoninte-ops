@@ -1,7 +1,8 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { resetDb, seedUser } from '../helpers/db'
 import { closeDb, pool } from '../../src/db/client'
-import { issueFamily, rotate } from '../../src/services/sessions'
+import { issueFamily, rotate, revokeAllForUser } from '../../src/services/sessions'
+import { logout } from '../../src/services/auth'
 import { ApiError } from '../../src/http/errors'
 import { sha256 } from '../../src/services/crypto'
 
@@ -139,5 +140,54 @@ describe('sessions service refresh race & theft tests (Task 2.20)', () => {
     const rotatedB = await rotate(sessionB.refreshToken)
     expect(rotatedB.userId).toBe(userB.id)
     expect(rotatedB.familyId).toBe(sessionB.familyId)
+  })
+
+  it('(d) replaying a rotated ancestor token inside grace after explicit logout throws UNAUTHENTICATED and does not resurrect the family', async () => {
+    const user = await seedUser()
+    const { refreshToken: t1, familyId } = await issueFamily(user.id)
+
+    // Rotate t1 -> t2. t1 is now a rotated ancestor with replaced_by set.
+    const { refreshToken: t2 } = await rotate(t1)
+    expect(t2).not.toBe(t1)
+
+    // Explicit logout presents t2, revoking the family.
+    await logout(t2)
+
+    // Verify all tokens in the family are revoked and replaced_by is cleared
+    const tokensAfterLogout = await fetchTokens(familyId)
+    expect(tokensAfterLogout.every((t) => t.revoked_at !== null)).toBe(true)
+    expect(tokensAfterLogout.every((t) => t.replaced_by === null)).toBe(true)
+
+    // Replaying ancestor t1 inside the grace window must NOT resurrect the family
+    const code = await errorCode(() => rotate(t1))
+    expect(code).toBe('UNAUTHENTICATED')
+
+    // Family must still have zero active tokens
+    const tokensFinal = await fetchTokens(familyId)
+    expect(tokensFinal.some((t) => t.revoked_at === null)).toBe(false)
+  })
+
+  it('(e) disabling then re-enabling a user, then replaying an ancestor token inside grace throws UNAUTHENTICATED and does not resurrect', async () => {
+    const user = await seedUser({ status: 'active' })
+    const { refreshToken: t1, familyId } = await issueFamily(user.id)
+
+    // Rotate t1 -> t2
+    const { refreshToken: t2 } = await rotate(t1)
+    expect(t2).not.toBe(t1)
+
+    // Admin disables user and revokes all tokens
+    await pool.query('UPDATE users SET status = "disabled" WHERE id = ?', [user.id])
+    await revokeAllForUser(user.id)
+
+    // Admin re-enables user
+    await pool.query('UPDATE users SET status = "active" WHERE id = ?', [user.id])
+
+    // Presenting ancestor t1 inside grace must NOT mint a successor or resurrect the family
+    const code = await errorCode(() => rotate(t1))
+    expect(code).toBe('UNAUTHENTICATED')
+
+    // Family remains completely dead
+    const tokensFinal = await fetchTokens(familyId)
+    expect(tokensFinal.some((t) => t.revoked_at === null)).toBe(false)
   })
 })

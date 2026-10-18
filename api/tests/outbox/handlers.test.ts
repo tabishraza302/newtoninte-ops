@@ -43,21 +43,17 @@ async function fetchJob(dedupeKey: string): Promise<JobRow> {
   return row
 }
 
-async function clearMailbox(): Promise<void> {
-  await fetch(MAILPIT_API, { method: 'DELETE' })
-}
-
 describe('email handlers', () => {
   beforeEach(async () => {
     await resetDb()
-    await clearMailbox()
   })
   afterAll(closeDb)
 
   it('emailInvite sends an invitation email to Mailpit with redeem code and link', async () => {
-    const to = 'newuser@example.test'
-    const teamName = 'Rocket Scientists'
-    const code = 'inv_secret_999'
+    const id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    const to = `newuser_${id}@example.test`
+    const teamName = `Rocket Scientists ${id}`
+    const code = `inv_secret_${id}`
 
     await emailInvite({ to, teamName, code })
 
@@ -67,7 +63,7 @@ describe('email handlers', () => {
         const res = await fetch(MAILPIT_API)
         const list = (await res.json()) as MailpitList
         const msg = list.messages.find(
-          (m) => m.To.some((recipient) => recipient.Address === to),
+          (m) => m.To.some((recipient) => recipient.Address === to) && m.Subject.includes(teamName),
         )
         expect(msg).toBeDefined()
         return msg!
@@ -89,10 +85,11 @@ describe('email handlers', () => {
   })
 
   it('runOnce with real handlers processes email.invite, marks done, nulls payload, and delivers email', async () => {
-    const dedupeKey = 'test-handler-invite-e2e'
-    const to = 'teammate@example.test'
-    const teamName = 'Core Ops'
-    const code = 'code_e2e_456'
+    const id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    const dedupeKey = `test-handler-invite-${id}`
+    const to = `teammate_${id}@example.test`
+    const teamName = `Core Ops ${id}`
+    const code = `code_e2e_${id}`
 
     await withTransaction(async (tx) => {
       await enqueue(tx, {
@@ -116,7 +113,7 @@ describe('email handlers', () => {
         const res = await fetch(MAILPIT_API)
         const list = (await res.json()) as MailpitList
         const found = list.messages.some(
-          (m) => m.To.some((recipient) => recipient.Address === to),
+          (m) => m.To.some((recipient) => recipient.Address === to) && m.Subject.includes(teamName),
         )
         expect(found).toBe(true)
       },
@@ -125,10 +122,11 @@ describe('email handlers', () => {
   })
 
   it('emailAssigned delivers email to Mailpit with item title, team name, and item link', async () => {
-    const to = 'assignee@example.test'
-    const teamName = 'Mission Control'
-    const itemTitle = 'Engine pressure sensor spike'
-    const itemId = 101
+    const id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    const to = `assignee_${id}@example.test`
+    const teamName = `Mission Control ${id}`
+    const itemTitle = `Engine pressure sensor spike ${id}`
+    const itemId = 10000 + Math.floor(Math.random() * 10000)
 
     await emailAssigned({ to, teamName, itemTitle, itemId })
 
@@ -137,7 +135,7 @@ describe('email handlers', () => {
         const res = await fetch(MAILPIT_API)
         const list = (await res.json()) as MailpitList
         const msg = list.messages.find(
-          (m) => m.To.some((recipient) => recipient.Address === to),
+          (m) => m.To.some((recipient) => recipient.Address === to) && m.Subject.includes(itemTitle),
         )
         expect(msg).toBeDefined()
         return msg!

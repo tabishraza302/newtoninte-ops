@@ -1,13 +1,30 @@
 import React, { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { ApiError } from '../api/client'
-import { commonStyles, theme } from '../theme'
+import { commonStyles, theme, getApiErrorMessage } from '../theme'
+
+function getSafeRedirectTarget(from: unknown): string {
+  let targetPath = ''
+  if (typeof from === 'string') {
+    targetPath = from
+  } else if (from && typeof from === 'object') {
+    const loc = from as { pathname?: unknown; search?: unknown; hash?: unknown }
+    if (typeof loc.pathname === 'string') {
+      targetPath = `${loc.pathname}${typeof loc.search === 'string' ? loc.search : ''}${typeof loc.hash === 'string' ? loc.hash : ''}`
+    }
+  }
+
+  if (targetPath.startsWith('/') && !targetPath.startsWith('//')) {
+    return targetPath
+  }
+  return '/'
+}
 
 export function Login(): React.ReactElement {
   const { login } = useAuth()
   const navigate = useNavigate()
-
+  const location = useLocation()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -20,14 +37,13 @@ export function Login(): React.ReactElement {
 
     try {
       await login(email, password)
-      navigate('/')
+      const target = getSafeRedirectTarget((location.state as { from?: unknown } | undefined)?.from)
+      navigate(target, { replace: true })
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         setError('Invalid credentials')
-      } else if (err instanceof Error) {
-        setError(err.message || 'Invalid credentials')
       } else {
-        setError('Invalid credentials')
+        setError(getApiErrorMessage(err, 'Invalid credentials'))
       }
     } finally {
       setLoading(false)
@@ -49,7 +65,8 @@ export function Login(): React.ReactElement {
         justifyContent: 'center',
         alignItems: 'center',
         padding: '2rem 1rem',
-        backgroundColor: '#f8fafc',
+        backgroundColor: theme.colors.bgApp,
+        fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
       }}
     >
       <div style={{ marginBottom: '2rem', textAlign: 'center' }}>
@@ -58,14 +75,13 @@ export function Login(): React.ReactElement {
             width: '44px',
             height: '44px',
             borderRadius: '10px',
-            backgroundColor: '#2563eb',
+            backgroundColor: theme.colors.accent,
             color: '#ffffff',
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
             fontWeight: 800,
             fontSize: '1.25rem',
-            boxShadow: '0 4px 14px rgba(37, 99, 235, 0.35)',
             marginBottom: '0.75rem',
           }}
         >
@@ -87,7 +103,7 @@ export function Login(): React.ReactElement {
           backgroundColor: '#ffffff',
           borderRadius: '12px',
           border: '1px solid #e2e8f0',
-          boxShadow: '0 10px 25px -5px rgba(15, 23, 42, 0.06), 0 8px 10px -6px rgba(15, 23, 42, 0.04)',
+          boxShadow: '0 4px 12px rgba(15, 23, 42, 0.04)',
           padding: '2.25rem',
         }}
       >
@@ -122,9 +138,22 @@ export function Login(): React.ReactElement {
           </div>
 
           <div style={{ marginBottom: '1.5rem' }}>
-            <label htmlFor="password" style={commonStyles.label}>
-              Password
-            </label>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.375rem' }}>
+              <label htmlFor="password" style={{ ...commonStyles.label, marginBottom: 0 }}>
+                Password
+              </label>
+              <Link
+                to="/forgot-password"
+                style={{
+                  fontSize: '0.8125rem',
+                  color: theme.colors.accent,
+                  textDecoration: 'none',
+                  fontWeight: 500,
+                }}
+              >
+                Forgot password?
+              </Link>
+            </div>
             <input
               id="password"
               type="password"

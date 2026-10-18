@@ -77,6 +77,7 @@ export function OutboxJobsTable(): React.ReactElement {
   const { data, isLoading, isFetching, error } = useJobs(query)
   const summary = useJobsSummary()
   const retryJob = useRetryJob()
+  const [inspectedJobId, setInspectedJobId] = useState<number | null>(null)
 
   useEffect(() => {
     if (!data) return
@@ -100,6 +101,8 @@ export function OutboxJobsTable(): React.ReactElement {
     }
     setSearchParams(next)
   }
+  const inspectedJob = jobs.find((j) => j.id === inspectedJobId) ?? null
+
 
   const nextCursor = data?.nextCursor ?? null
   const byStatus = summary.data?.byStatus
@@ -382,36 +385,57 @@ export function OutboxJobsTable(): React.ReactElement {
                       {job.lastError ?? '-'}
                     </td>
                     <td style={{ padding: '0.875rem 1rem' }}>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          retryJob.mutate(
-                            { id: job.id },
-                            {
-                              onSuccess: () => {
-                                setCursor(undefined)
-                                setJobs([])
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <button
+                          type="button"
+                          aria-label={`Inspect job #${job.id}`}
+                          onClick={() => setInspectedJobId(job.id)}
+                          style={{
+                            padding: '0.35rem 0.75rem',
+                            borderRadius: '6px',
+                            border: '1px solid #cbd5e1',
+                            backgroundColor: '#ffffff',
+                            color: '#334155',
+                            fontWeight: 600,
+                            fontSize: '0.8125rem',
+                            cursor: 'pointer',
+                            fontFamily: 'inherit',
+                            transition: 'all 0.15s ease',
+                          }}
+                        >
+                          Inspect
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            retryJob.mutate(
+                              { id: job.id },
+                              {
+                                onSuccess: () => {
+                                  setCursor(undefined)
+                                  setJobs([])
+                                },
                               },
-                            },
-                          )
-                        }
-                        disabled={job.status !== 'failed' || retryJob.isPending}
-                        style={{
-                          padding: '0.35rem 0.85rem',
-                          borderRadius: '6px',
-                          border: job.status === 'failed' ? '1px solid transparent' : '1px solid #cbd5e1',
-                          backgroundColor: job.status === 'failed' ? '#2563eb' : '#f1f5f9',
-                          color: job.status === 'failed' ? '#ffffff' : '#94a3b8',
-                          fontWeight: 600,
-                          fontSize: '0.8125rem',
-                          cursor: job.status === 'failed' ? 'pointer' : 'not-allowed',
-                          fontFamily: 'inherit',
-                          transition: 'all 0.15s ease',
-                          boxShadow: job.status === 'failed' ? '0 1px 2px 0 rgba(37, 99, 235, 0.2)' : 'none',
-                        }}
-                      >
-                        Retry
-                      </button>
+                            )
+                          }
+                          disabled={job.status !== 'failed' || retryJob.isPending}
+                          style={{
+                            padding: '0.35rem 0.85rem',
+                            borderRadius: '6px',
+                            border: job.status === 'failed' ? `1px solid ${theme.colors.accent}` : '1px solid #cbd5e1',
+                            backgroundColor: job.status === 'failed' ? theme.colors.accent : '#f1f5f9',
+                            color: job.status === 'failed' ? '#ffffff' : '#94a3b8',
+                            fontWeight: 600,
+                            fontSize: '0.8125rem',
+                            cursor: job.status === 'failed' ? 'pointer' : 'not-allowed',
+                            fontFamily: 'inherit',
+                            transition: 'all 0.15s ease',
+                            boxShadow: job.status === 'failed' ? '0 1px 2px 0 rgba(15, 118, 110, 0.15)' : 'none',
+                          }}
+                        >
+                          Retry
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -437,6 +461,232 @@ export function OutboxJobsTable(): React.ReactElement {
             >
               {isFetching ? 'Loading more...' : 'Load more'}
             </button>
+          </div>
+        )}
+
+        {inspectedJob && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="job-inspector-title"
+            style={{
+              position: 'fixed',
+              inset: 0,
+              backgroundColor: 'rgba(15, 23, 42, 0.5)',
+              backdropFilter: 'blur(2px)',
+              zIndex: 100,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '1rem',
+            }}
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setInspectedJobId(null)
+            }}
+          >
+            <div
+              style={{
+                backgroundColor: '#ffffff',
+                borderRadius: '12px',
+                padding: '1.75rem',
+                maxWidth: '600px',
+                width: '100%',
+                boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+                border: '1px solid #e2e8f0',
+                maxHeight: '90vh',
+                overflowY: 'auto',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  borderBottom: '1px solid #e2e8f0',
+                  paddingBottom: '1rem',
+                  marginBottom: '1.25rem',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <h2
+                    id="job-inspector-title"
+                    style={{
+                      fontSize: '1.25rem',
+                      fontWeight: 700,
+                      margin: 0,
+                      color: '#0f172a',
+                    }}
+                  >
+                    Job Details #{inspectedJob.id}
+                  </h2>
+                  <span style={getJobStatusBadge(inspectedJob.status)}>
+                    {inspectedJob.status}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  aria-label="Close inspector"
+                  onClick={() => setInspectedJobId(null)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    fontSize: '1.25rem',
+                    color: '#64748b',
+                    cursor: 'pointer',
+                    padding: '0.25rem 0.5rem',
+                    lineHeight: 1,
+                    borderRadius: '4px',
+                  }}
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', fontSize: '0.875rem' }}>
+                <div>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', marginBottom: '0.25rem' }}>
+                    Job Type
+                  </div>
+                  <div style={{ fontFamily: 'ui-monospace, monospace', color: '#0f172a', fontWeight: 600 }}>
+                    {inspectedJob.type}
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', marginBottom: '0.25rem' }}>
+                    Deduplication Key
+                  </div>
+                  <div style={{ fontFamily: 'ui-monospace, monospace', color: '#0f172a', wordBreak: 'break-all', backgroundColor: '#f8fafc', padding: '0.5rem 0.75rem', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
+                    {inspectedJob.dedupeKey}
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', marginBottom: '0.25rem' }}>
+                    Attempts
+                  </div>
+                  <div style={{ color: '#0f172a', fontWeight: 500 }}>
+                    {inspectedJob.attempts} of {inspectedJob.maxAttempts}
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', marginBottom: '0.25rem' }}>
+                    Timeline
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.5rem', backgroundColor: '#f8fafc', padding: '0.75rem', borderRadius: '6px', border: '1px solid #e2e8f0', fontSize: '0.8125rem' }}>
+                    <div>
+                      <div style={{ color: '#64748b', fontSize: '0.75rem' }}>Created at</div>
+                      <div style={{ color: '#0f172a', fontWeight: 500 }}>{new Date(inspectedJob.createdAt).toLocaleString()}</div>
+                    </div>
+                    <div>
+                      <div style={{ color: '#64748b', fontSize: '0.75rem' }}>Available at</div>
+                      <div style={{ color: '#0f172a', fontWeight: 500 }}>{new Date(inspectedJob.availableAt).toLocaleString()}</div>
+                    </div>
+                    <div>
+                      <div style={{ color: '#64748b', fontSize: '0.75rem' }}>Updated at</div>
+                      <div style={{ color: '#0f172a', fontWeight: 500 }}>{new Date(inspectedJob.updatedAt).toLocaleString()}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', marginBottom: '0.25rem' }}>
+                    Worker Lock Status
+                  </div>
+                  <div style={{ color: '#0f172a', fontSize: '0.8125rem' }}>
+                    {inspectedJob.lockedBy || inspectedJob.lockedAt ? (
+                      <span>
+                        Locked by <strong>{inspectedJob.lockedBy ?? 'unknown'}</strong> at {inspectedJob.lockedAt ? new Date(inspectedJob.lockedAt).toLocaleString() : 'N/A'}
+                      </span>
+                    ) : (
+                      <span style={{ color: '#059669', fontWeight: 500 }}>Unlocked / Ready</span>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', marginBottom: '0.25rem' }}>
+                    Error Trace / Message
+                  </div>
+                  {inspectedJob.lastError ? (
+                    <pre
+                      style={{
+                        margin: 0,
+                        padding: '0.75rem',
+                        backgroundColor: '#fef2f2',
+                        border: '1px solid #fecaca',
+                        borderRadius: '6px',
+                        color: '#991b1b',
+                        fontFamily: 'ui-monospace, monospace',
+                        fontSize: '0.75rem',
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word',
+                      }}
+                    >
+                      {inspectedJob.lastError}
+                    </pre>
+                  ) : (
+                    <div style={{ color: '#64748b', fontStyle: 'italic', fontSize: '0.8125rem' }}>
+                      No error recorded
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div
+                style={{
+                  marginTop: '1.5rem',
+                  paddingTop: '1rem',
+                  borderTop: '1px solid #e2e8f0',
+                  display: 'flex',
+                  justifyContent: 'flex-end',
+                  gap: '0.75rem',
+                }}
+              >
+                {inspectedJob.status === 'failed' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      retryJob.mutate(
+                        { id: inspectedJob.id },
+                        {
+                          onSuccess: () => {
+                            setCursor(undefined)
+                            setJobs([])
+                            setInspectedJobId(null)
+                          },
+                        },
+                      )
+                    }}
+                    disabled={retryJob.isPending}
+                    style={{
+                      padding: '0.5rem 1rem',
+                      borderRadius: '6px',
+                      border: `1px solid ${theme.colors.accent}`,
+                      backgroundColor: theme.colors.accent,
+                      color: '#ffffff',
+                      fontWeight: 600,
+                      fontSize: '0.875rem',
+                      cursor: retryJob.isPending ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    {retryJob.isPending ? 'Retrying…' : 'Retry Job'}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setInspectedJobId(null)}
+                  style={{
+                    ...commonStyles.buttonSecondary,
+                    padding: '0.5rem 1rem',
+                    fontSize: '0.875rem',
+                  }}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </section>

@@ -29,40 +29,32 @@ interface MailpitList {
   messages: MailpitMessageSummary[]
 }
 
-async function clearMailbox(): Promise<void> {
-  try {
-    await fetch(MAILPIT_API, { method: 'DELETE' })
-  } catch {
-    // Ignore if mailpit not reachable yet
-  }
-}
-
 describe('end-to-end auth flow (Task 2.19)', () => {
   const app = createApp()
 
   beforeEach(async () => {
     await resetDb()
-    await clearMailbox()
   })
-
   afterAll(closeDb)
 
   it('continuous flow through HTTP surface: lead invites, worker sends mail, user redeems via Mailpit code, logs in, checks /me, logs out, refresh fails', async () => {
-    // 1. Seed a team + a lead member
-    const team = await seedTeam({ name: 'Apollo Team', slug: 'apollo' })
+    // 1. Seed a team + a lead member with unique identifiers
+    const runId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    const team = await seedTeam({ name: `Apollo Team ${runId}`, slug: `apollo-${runId}` })
     const leadPassword = 'LeadPassword123!'
     const leadPasswordHash = await hashPassword(leadPassword)
+    const leadEmail = `lead_${runId}@apollo.test`
     const lead = await seedUser({
-      email: 'lead@apollo.test',
+      email: leadEmail,
       passwordHash: leadPasswordHash,
-      displayName: 'Apollo Lead',
+      displayName: `Apollo Lead ${runId}`,
     })
     await seedMembership(lead.id, team.id, 'lead')
 
     // 2. Lead logs in via POST /auth/login to obtain access token
     const loginRes = await request(app)
       .post('/auth/login')
-      .send({ email: 'lead@apollo.test', password: leadPassword })
+      .send({ email: leadEmail, password: leadPassword })
 
     expect(loginRes.status).toBe(200)
     expect(loginRes.body.user.id).toBe(lead.id)
@@ -71,7 +63,7 @@ describe('end-to-end auth flow (Task 2.19)', () => {
     expect(leadAccessToken.length).toBeGreaterThan(0)
 
     // 3. Lead invites user via POST /teams/:id/invitations
-    const invitedEmail = 'newhire@apollo.test'
+    const invitedEmail = `newhire_${runId}@apollo.test`
     const inviteRes = await request(app)
       .post(`/teams/${team.id}/invitations`)
       .set('Authorization', `Bearer ${leadAccessToken}`)
@@ -97,7 +89,7 @@ describe('end-to-end auth flow (Task 2.19)', () => {
         expect(res.status).toBe(200)
         const list = (await res.json()) as MailpitList
         const msg = list.messages.find((m) =>
-          m.To.some((recipient) => recipient.Address === invitedEmail),
+          m.To.some((recipient) => recipient.Address === invitedEmail) && m.Subject.includes(team.name),
         )
         expect(msg).toBeDefined()
         return msg!

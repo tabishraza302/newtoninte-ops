@@ -1,5 +1,7 @@
 import express, { type Express } from 'express'
+import { config } from './config'
 import { requestId } from './http/middleware/requestId'
+import { requestLogger } from './http/middleware/logging'
 import { notFound } from './http/middleware/notFound'
 import { errorHandler } from './http/middleware/errorHandler'
 import { healthRouter } from './http/routes/health'
@@ -11,7 +13,10 @@ import { adminRouter } from './http/routes/admin'
 
 export function createApp(): Express {
   const app = express()
+  app.disable('x-powered-by')
+  app.set('trust proxy', config.trustProxy)
   app.use(requestId())
+  app.use(requestLogger())
   app.use(express.json())
   app.use(healthRouter)
   app.use(teamsRouter)

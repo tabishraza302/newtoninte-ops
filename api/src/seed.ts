@@ -1,7 +1,8 @@
-import { inArray, sql } from 'drizzle-orm'
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm'
 import { closeDb, db } from './db/client'
-import { memberships, teams, users, workItems } from './db/schema'
-import type { NewMembership, NewWorkItem, TeamRow } from './db/schema'
+import { activityEvents, memberships, teams, users, workItems } from './db/schema'
+import type { NewMembership, NewWorkItem, TeamRow, WorkItemRow } from './db/schema'
+import type { Tx } from './db/tx'
 import { ITEM_TYPES, PRIORITIES, STATUSES, type Role, type Status } from './domain/types'
 import { hashPassword } from './services/crypto'
 
@@ -127,6 +128,26 @@ function buildItemRows(startIndex: number, count: number, demoTeams: TeamRow[], 
   return rows
 }
 
+async function recordSeedBaselines(tx: Tx, rows: WorkItemRow[], imported: boolean): Promise<void> {
+  await tx.insert(activityEvents).values(rows.map((item) => ({
+    workItemId: item.id,
+    actorId: null,
+    type: 'created',
+    metadata: {
+      seeded: true,
+      snapshot: imported,
+      title: item.title,
+      description: item.description,
+      type: item.type,
+      priority: item.priority,
+      status: item.status,
+      assigneeId: item.assigneeId,
+      dueAt: item.dueAt?.toISOString() ?? null,
+      createdBy: item.createdBy,
+    },
+  })))
+}
+
 /**
  * Idempotently seeds the demo dataset and returns the row counts present
  * afterwards. Teams, users and memberships upsert on their unique keys
@@ -179,8 +200,31 @@ export async function runSeed(db: Db): Promise<SeedCounts> {
     const assigneeIds = DEMO_USERS.filter((u) => u.role === 'lead' || u.role === 'member').map((u) => userIdByEmail.get(u.email)!)
     const itemRows = buildItemRows(existingItems, shortfall, [opsTeam, financeTeam], assigneeIds)
     for (let offset = 0; offset < itemRows.length; offset += INSERT_CHUNK_SIZE) {
-      await db.insert(workItems).values(itemRows.slice(offset, offset + INSERT_CHUNK_SIZE))
+      await db.transaction(async (tx) => {
+        const ids = await tx.insert(workItems)
+          .values(itemRows.slice(offset, offset + INSERT_CHUNK_SIZE))
+          .$returningId()
+        const inserted = await tx.select().from(workItems).where(inArray(workItems.id, ids.map((row) => row.id)))
+        await recordSeedBaselines(tx, inserted, false)
+      })
     }
+  }
+
+  // Earlier seeds omitted history. Import only items with no events, recording
+  // their current state honestly as a baseline, never inventing past transitions
+  // or overwriting an item's existing history. Bounded batches keep startup small.
+  while (true) {
+    const imported = await db.transaction(async (tx) => {
+      const rows = await tx.select({ item: workItems }).from(workItems)
+        .leftJoin(activityEvents, eq(activityEvents.workItemId, workItems.id))
+        .where(and(inArray(workItems.teamId, teamIdList), isNull(activityEvents.id)))
+        .limit(INSERT_CHUNK_SIZE)
+        .for('update')
+      if (rows.length === 0) return false
+      await recordSeedBaselines(tx, rows.map((row) => row.item), true)
+      return true
+    })
+    if (!imported) break
   }
 
   const [teamCountRow] = await db

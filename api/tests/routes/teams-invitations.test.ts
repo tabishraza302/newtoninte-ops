@@ -280,4 +280,46 @@ describe('Teams and Invitations routes (Task 2.17)', () => {
     expect(listInvAfterRes.status).toBe(200)
     expect(listInvAfterRes.body.invitations[0].revokedAt).toBeTruthy()
   })
+
+  it('POST /invitations/redeem rejects passwords > 72 bytes and disabled Bearer tokens', async () => {
+    // Password > 72 bytes
+    const resLongPw = await request(app)
+      .post('/invitations/redeem')
+      .send({ code: 'somecode', password: 'a'.repeat(73) })
+
+    expect(resLongPw.status).toBe(422)
+    expect(resLongPw.body.error.code).toBe('VALIDATION_ERROR')
+
+    // Disabled actor Bearer token
+    const disabledUser = await seedUser({ status: 'disabled' })
+    const disabledToken = await signAccessToken(disabledUser.id)
+    const resDisabled = await request(app)
+      .post('/invitations/redeem')
+      .set('Authorization', `Bearer ${disabledToken}`)
+      .send({ code: 'somecode' })
+
+    expect(resDisabled.status).toBe(401)
+    expect(resDisabled.body.error.code).toBe('UNAUTHENTICATED')
+  })
+
+  it('POST /teams rejects name > 120 or slug > 80 with 422 VALIDATION_ERROR', async () => {
+    const admin = await seedUser({ isAdmin: true })
+    const adminToken = await signAccessToken(admin.id)
+
+    const resLongName = await request(app)
+      .post('/teams')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ name: 'a'.repeat(121), slug: 'valid-slug' })
+
+    expect(resLongName.status).toBe(422)
+    expect(resLongName.body.error.code).toBe('VALIDATION_ERROR')
+
+    const resLongSlug = await request(app)
+      .post('/teams')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ name: 'Valid Name', slug: 'a'.repeat(81) })
+
+    expect(resLongSlug.status).toBe(422)
+    expect(resLongSlug.body.error.code).toBe('VALIDATION_ERROR')
+  })
 })

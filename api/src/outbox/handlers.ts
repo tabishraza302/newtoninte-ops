@@ -15,20 +15,16 @@ function parseEmailInviteParams(payload: unknown): EmailInviteParams {
     typeof payload === 'object' &&
     payload !== null &&
     'to' in payload &&
+    typeof payload.to === 'string' &&
     'teamName' in payload &&
-    'code' in payload
+    typeof payload.teamName === 'string' &&
+    'code' in payload &&
+    typeof payload.code === 'string'
   ) {
-    const candidate = payload as Record<string, unknown>
-    if (
-      typeof candidate.to === 'string' &&
-      typeof candidate.teamName === 'string' &&
-      typeof candidate.code === 'string'
-    ) {
-      return {
-        to: candidate.to,
-        teamName: candidate.teamName,
-        code: candidate.code,
-      }
+    return {
+      to: payload.to,
+      teamName: payload.teamName,
+      code: payload.code,
     }
   }
   throw new Error('Invalid email.invite payload: expected { to, teamName, code }')
@@ -53,14 +49,13 @@ function parseEmailResetParams(payload: unknown): EmailResetParams {
     typeof payload === 'object' &&
     payload !== null &&
     'to' in payload &&
-    'code' in payload
+    typeof payload.to === 'string' &&
+    'code' in payload &&
+    typeof payload.code === 'string'
   ) {
-    const candidate = payload as Record<string, unknown>
-    if (typeof candidate.to === 'string' && typeof candidate.code === 'string') {
-      return {
-        to: candidate.to,
-        code: candidate.code,
-      }
+    return {
+      to: payload.to,
+      code: payload.code,
     }
   }
   throw new Error('Invalid email.reset payload: expected { to, code }')
@@ -88,23 +83,19 @@ function parseEmailAssignedParams(payload: unknown): EmailAssignedParams {
     typeof payload === 'object' &&
     payload !== null &&
     'to' in payload &&
+    typeof payload.to === 'string' &&
     'itemTitle' in payload &&
+    typeof payload.itemTitle === 'string' &&
     'teamName' in payload &&
-    'itemId' in payload
+    typeof payload.teamName === 'string' &&
+    'itemId' in payload &&
+    typeof payload.itemId === 'number'
   ) {
-    const candidate = payload as Record<string, unknown>
-    if (
-      typeof candidate.to === 'string' &&
-      typeof candidate.itemTitle === 'string' &&
-      typeof candidate.teamName === 'string' &&
-      typeof candidate.itemId === 'number'
-    ) {
-      return {
-        to: candidate.to,
-        itemTitle: candidate.itemTitle,
-        teamName: candidate.teamName,
-        itemId: candidate.itemId,
-      }
+    return {
+      to: payload.to,
+      itemTitle: payload.itemTitle,
+      teamName: payload.teamName,
+      itemId: payload.itemId,
     }
   }
   throw new Error('Invalid email.assigned payload: expected { to, itemTitle, teamName, itemId }')

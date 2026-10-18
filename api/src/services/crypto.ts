@@ -4,15 +4,18 @@
 // third-party dependency and no second hashing route. Tokens and ids draw from
 // the platform CSPRNG; `sha256` exists so opaque tokens are stored as digests,
 // never as the value that grants access.
+import { ApiError } from '../http/errors'
 
 /** How many random bytes a session/invite/reset token carries by default. */
 const DEFAULT_TOKEN_BYTES = 32
 
 /** Hashes a plaintext password with bcrypt (`$2b$`, cost 10). */
-export function hashPassword(pw: string): Promise<string> {
+export async function hashPassword(pw: string): Promise<string> {
+  if (Buffer.byteLength(pw, 'utf8') > 72) {
+    throw ApiError.of('VALIDATION_ERROR', 'Password must not exceed 72 bytes')
+  }
   return Bun.password.hash(pw, { algorithm: 'bcrypt' })
 }
-
 /**
  * Checks `pw` against a stored bcrypt hash.
  *
@@ -20,7 +23,7 @@ export function hashPassword(pw: string): Promise<string> {
  * throwing, so it can never turn a login attempt into a 500.
  */
 export async function verifyPassword(pw: string, hash: string): Promise<boolean> {
-  if (hash === '') return false
+  if (hash === '' || Buffer.byteLength(pw, 'utf8') > 72) return false
   try {
     return await Bun.password.verify(pw, hash)
   } catch {

@@ -4,7 +4,7 @@ import { db } from '../db/client'
 import { invitations, memberships, membershipEvents, teams, users, type UserRow } from '../db/schema'
 import { withTransaction } from '../db/tx'
 import { ApiError } from '../http/errors'
-import { buildPage, decodeCursor, DEFAULT_LIMIT, MAX_LIMIT } from '../http/cursor'
+import { buildPage, decodeIdCursor, DEFAULT_LIMIT, MAX_LIMIT } from '../http/cursor'
 import { authorize } from '../policy'
 import { hashPassword, randomToken, sha256, verifyPassword } from './crypto'
 import { enqueue } from './outbox'
@@ -55,16 +55,27 @@ export async function createInvitation(
 ): Promise<InvitationView> {
   await authorize(actor, 'invitation:manage', { kind: 'team', teamId })
 
+  const normalizedEmail = input.email.trim().toLowerCase()
+  if (!normalizedEmail || !normalizedEmail.includes('@')) {
+    throw ApiError.of('VALIDATION_ERROR', 'Invalid email address')
+  }
+  if (input.maxUses !== undefined && (!Number.isInteger(input.maxUses) || input.maxUses < 1)) {
+    throw ApiError.of('VALIDATION_ERROR', 'maxUses must be a positive integer')
+  }
+
   return withTransaction(async (tx) => {
     const [team] = await tx
-      .select({ name: teams.name })
+      .select({ id: teams.id, name: teams.name })
       .from(teams)
       .where(eq(teams.id, teamId))
       .limit(1)
+      .for('update')
 
     if (!team) {
       throw ApiError.of('NOT_FOUND', 'Team not found')
     }
+
+    await authorize(actor, 'invitation:manage', { kind: 'team', teamId }, tx)
 
     const token = randomToken()
     const codeHash = sha256(token)
@@ -72,7 +83,7 @@ export async function createInvitation(
     const [inserted] = await tx.insert(invitations).values({
       teamId,
       role: input.role,
-      email: input.email,
+      email: normalizedEmail,
       codeHash,
       maxUses: input.maxUses ?? 1,
       uses: 0,
@@ -83,7 +94,7 @@ export async function createInvitation(
     await enqueue(tx, {
       type: 'email.invite',
       payload: {
-        to: input.email,
+        to: normalizedEmail,
         teamName: team.name,
         code: token,
       },
@@ -118,12 +129,12 @@ export async function listInvitations(
   await authorize(actor, 'invitation:manage', { kind: 'team', teamId })
 
   const scope = `team:${teamId}:invitations`
-  const decoded = decodeCursor(cursor, scope)
+  const cursorId = decodeIdCursor(cursor, scope)
   const effectiveLimit = Math.min(Math.max(1, limit ?? DEFAULT_LIMIT), MAX_LIMIT)
 
   const conditions = [eq(invitations.teamId, teamId)]
-  if (decoded && typeof decoded.id === 'number') {
-    conditions.push(gt(invitations.id, decoded.id))
+  if (cursorId !== null) {
+    conditions.push(gt(invitations.id, cursorId))
   }
 
   const rows = await db
@@ -154,26 +165,29 @@ export async function revokeInvitation(
   actor: Actor,
   invitationId: number,
 ): Promise<void> {
-  const [inv] = await db
-    .select({ id: invitations.id, teamId: invitations.teamId, revokedAt: invitations.revokedAt })
-    .from(invitations)
-    .where(eq(invitations.id, invitationId))
-    .limit(1)
+  return withTransaction(async (tx) => {
+    const [inv] = await tx
+      .select({ id: invitations.id, teamId: invitations.teamId, revokedAt: invitations.revokedAt })
+      .from(invitations)
+      .where(eq(invitations.id, invitationId))
+      .limit(1)
+      .for('update')
 
-  if (!inv) {
-    throw ApiError.of('NOT_FOUND', 'Invitation not found')
-  }
+    if (!inv) {
+      throw ApiError.of('NOT_FOUND', 'Invitation not found')
+    }
 
-  await authorize(actor, 'invitation:manage', { kind: 'team', teamId: inv.teamId })
+    await authorize(actor, 'invitation:manage', { kind: 'team', teamId: inv.teamId }, tx)
 
-  if (inv.revokedAt !== null) {
-    return
-  }
+    if (inv.revokedAt !== null) {
+      return
+    }
 
-  await db
-    .update(invitations)
-    .set({ revokedAt: sql`CURRENT_TIMESTAMP(3)` })
-    .where(eq(invitations.id, invitationId))
+    await tx
+      .update(invitations)
+      .set({ revokedAt: sql`CURRENT_TIMESTAMP(3)` })
+      .where(eq(invitations.id, invitationId))
+  })
 }
 
 export interface RedeemInput {
@@ -219,9 +233,11 @@ export async function redeem(
       throw ApiError.of('NOT_FOUND', 'Invitation not found')
     }
 
+    const inviteEmail = invitation.email.toLowerCase()
+
     // 2. Email match on both branches
     if (actor === null) {
-      if (!input.email || input.email.trim().toLowerCase() !== invitation.email.toLowerCase()) {
+      if (!input.email || input.email.trim().toLowerCase() !== inviteEmail) {
         throw ApiError.of('FORBIDDEN')
       }
     } else {
@@ -231,7 +247,7 @@ export async function redeem(
         .where(eq(users.id, actor.id))
         .limit(1)
 
-      if (!actorUser || actorUser.email.toLowerCase() !== invitation.email.toLowerCase()) {
+      if (!actorUser || actorUser.status === 'disabled' || actorUser.email.toLowerCase() !== inviteEmail) {
         throw ApiError.of('FORBIDDEN')
       }
     }
@@ -248,9 +264,12 @@ export async function redeem(
       if (!actorUser) {
         throw ApiError.of('NOT_FOUND', 'User not found')
       }
+      if (actorUser.status === 'disabled') {
+        throw ApiError.of('FORBIDDEN')
+      }
       user = actorUser
     } else {
-      const targetEmail = invitation.email.toLowerCase()
+      const targetEmail = inviteEmail
       const [existingUser] = await tx
         .select()
         .from(users)
@@ -258,6 +277,9 @@ export async function redeem(
         .limit(1)
 
       if (existingUser) {
+        if (existingUser.status === 'disabled') {
+          throw ApiError.of('FORBIDDEN')
+        }
         if (!input.password) {
           throw ApiError.of('FORBIDDEN')
         }
@@ -270,12 +292,20 @@ export async function redeem(
         if (!input.password) {
           throw ApiError.of('VALIDATION_ERROR', 'Password is required to create an account')
         }
+        if (input.password.length < 8) {
+          throw ApiError.of('VALIDATION_ERROR', 'Password must be at least 8 characters')
+        }
+        if (Buffer.byteLength(input.password, 'utf8') > 72) {
+          throw ApiError.of('VALIDATION_ERROR', 'Password must not exceed 72 bytes')
+        }
         const passwordHash = await hashPassword(input.password)
         const displayName = input.displayName?.trim() || targetEmail.split('@')[0] || 'User'
         const [inserted] = await tx.insert(users).values({
           email: targetEmail,
           passwordHash,
           displayName,
+          isAdmin: false,
+          status: 'active',
         })
         const [newUser] = await tx
           .select()
@@ -325,13 +355,10 @@ export async function redeem(
       if (!latest || latest.revokedAt !== null) {
         throw ApiError.of('INVITE_REVOKED')
       }
-      if (new Date(latest.expiresAt).getTime() <= Date.now()) {
-        throw ApiError.of('INVITE_EXPIRED')
-      }
       if (latest.uses >= latest.maxUses) {
         throw ApiError.of('INVITE_EXHAUSTED')
       }
-      throw ApiError.of('FORBIDDEN')
+      throw ApiError.of('INVITE_EXPIRED')
     }
 
     // 6. Insert membership + membership_events

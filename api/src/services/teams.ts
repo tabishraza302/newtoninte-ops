@@ -1,11 +1,23 @@
-import { asc, eq, inArray } from 'drizzle-orm'
+import { and, asc, eq, gt, inArray, sql } from 'drizzle-orm'
 import { db } from '../db/client'
-import { teams } from '../db/schema'
+import { membershipEvents, memberships, teams, users } from '../db/schema'
+import { withTransaction } from '../db/tx'
+import { buildPage, decodeIdCursor, DEFAULT_LIMIT, MAX_LIMIT } from '../http/cursor'
 import { ApiError } from '../http/errors'
 import { authorize, can, scopeTeamIds } from '../policy'
-import type { Actor } from '../domain/types'
+import type { Actor, Role } from '../domain/types'
 
 export type TeamRow = typeof teams.$inferSelect
+
+function isDupEntry(err: unknown): boolean {
+  const target = err && typeof err === 'object' && 'cause' in err && err.cause ? err.cause : err
+  if (target && typeof target === 'object') {
+    const code = 'code' in target ? target.code : undefined
+    const errno = 'errno' in target ? target.errno : undefined
+    return code === 'ER_DUP_ENTRY' || errno === 1062
+  }
+  return false
+}
 
 /**
  * Creates a new team in the system. Admin-only per spec §7.1.
@@ -19,22 +31,38 @@ export async function createTeam(
     throw ApiError.of('FORBIDDEN')
   }
 
-  const [result] = await db.insert(teams).values({
-    name: input.name,
-    slug: input.slug,
-  })
-
-  const [row] = await db
-    .select()
-    .from(teams)
-    .where(eq(teams.id, result.insertId))
-    .limit(1)
-
-  if (!row) {
-    throw ApiError.of('INTERNAL_ERROR', 'Failed to retrieve created team')
+  const name = input.name.trim()
+  const slug = input.slug.trim().toLowerCase()
+  if (name.length < 1 || name.length > 120) {
+    throw ApiError.of('VALIDATION_ERROR', 'Team name must be between 1 and 120 characters')
+  }
+  if (slug.length < 1 || slug.length > 80) {
+    throw ApiError.of('VALIDATION_ERROR', 'Team slug must be between 1 and 80 characters')
   }
 
-  return row
+  try {
+    const [result] = await db.insert(teams).values({
+      name,
+      slug,
+    })
+
+    const [row] = await db
+      .select()
+      .from(teams)
+      .where(eq(teams.id, result.insertId))
+      .limit(1)
+
+    if (!row) {
+      throw ApiError.of('INTERNAL_ERROR', 'Failed to retrieve created team')
+    }
+
+    return row
+  } catch (err) {
+    if (isDupEntry(err)) {
+      throw ApiError.of('VALIDATION_ERROR', 'A team with this slug already exists')
+    }
+    throw err
+  }
 }
 
 /**
@@ -85,4 +113,156 @@ export async function getTeam(actor: Actor, teamId: number): Promise<TeamRow> {
   }
 
   return row
+}
+
+export interface AdminTeamMember {
+  id: number
+  userId: number
+  teamId: number
+  role: Role
+  createdAt: Date
+  user: {
+    id: number
+    email: string
+    displayName: string
+  }
+}
+
+export interface AdminListTeamMembersResult {
+  members: AdminTeamMember[]
+  nextCursor: string | null
+}
+
+/**
+ * Admin-only inspection of team roster (spec §7.1).
+ * Lists members of a team paginated by keyset (`memberships.id ASC`).
+ */
+export async function adminListTeamMembers(
+  actor: Actor,
+  teamId: number,
+  query?: { cursor?: string | undefined; limit?: number | undefined } | undefined,
+): Promise<AdminListTeamMembersResult> {
+  const allowed = await can(actor, 'user:manage')
+  if (!allowed) {
+    throw ApiError.of('FORBIDDEN')
+  }
+
+  const [team] = await db
+    .select({ id: teams.id })
+    .from(teams)
+    .where(eq(teams.id, teamId))
+    .limit(1)
+
+  if (!team) {
+    throw ApiError.of('NOT_FOUND', 'Team not found')
+  }
+
+  const scope = `admin:team:${teamId}:members`
+  const cursorId = decodeIdCursor(query?.cursor, scope)
+  const limit = query?.limit ?? DEFAULT_LIMIT
+  const effectiveLimit = Math.min(Math.max(1, limit), MAX_LIMIT)
+
+  const conditions = [eq(memberships.teamId, teamId)]
+  if (cursorId !== null) {
+    conditions.push(gt(memberships.id, cursorId))
+  }
+
+  const rows = await db
+    .select({
+      id: memberships.id,
+      userId: memberships.userId,
+      teamId: memberships.teamId,
+      role: memberships.role,
+      createdAt: memberships.createdAt,
+      userDisplayName: users.displayName,
+      userEmail: users.email,
+    })
+    .from(memberships)
+    .innerJoin(users, eq(memberships.userId, users.id))
+    .where(and(...conditions))
+    .orderBy(asc(memberships.id))
+    .limit(effectiveLimit + 1)
+
+  const { page, nextCursor } = buildPage(
+    rows,
+    effectiveLimit,
+    (r) => ({ id: r.id }),
+    scope,
+  )
+
+  const members: AdminTeamMember[] = page.map((r) => ({
+    id: r.id,
+    userId: r.userId,
+    teamId: r.teamId,
+    role: r.role,
+    createdAt: r.createdAt,
+    user: {
+      id: r.userId,
+      email: r.userEmail,
+      displayName: r.userDisplayName,
+    },
+  }))
+
+  return { members, nextCursor }
+}
+
+/**
+ * Admin removal of a member from a team (spec §7.1).
+ * Enforces LAST_LEAD guard (422) if removing the only lead.
+ * Appends a 'removed' event to membershipEvents.
+ */
+export async function adminRemoveTeamMember(
+  actor: Actor,
+  teamId: number,
+  userId: number,
+): Promise<void> {
+  const allowed = await can(actor, 'user:manage')
+  if (!allowed) {
+    throw ApiError.of('FORBIDDEN')
+  }
+
+  await withTransaction(async (tx) => {
+    const [team] = await tx
+      .select({ id: teams.id })
+      .from(teams)
+      .where(eq(teams.id, teamId))
+      .for('update')
+
+    if (!team) {
+      throw ApiError.of('NOT_FOUND', 'Team not found')
+    }
+
+    const [target] = await tx
+      .select()
+      .from(memberships)
+      .where(and(eq(memberships.teamId, teamId), eq(memberships.userId, userId)))
+      .for('update')
+
+    if (!target) {
+      throw ApiError.of('NOT_FOUND', 'Member not found')
+    }
+
+    if (target.role === 'lead') {
+      const [leadCountRow] = await tx
+        .select({ count: sql<number>`count(*)` })
+        .from(memberships)
+        .where(and(eq(memberships.teamId, teamId), eq(memberships.role, 'lead')))
+        .for('update')
+
+      if ((leadCountRow?.count ?? 0) <= 1) {
+        throw ApiError.of('LAST_LEAD', 'Cannot remove the last lead from a team')
+      }
+    }
+
+    await tx.delete(memberships).where(eq(memberships.id, target.id))
+
+    await tx.insert(membershipEvents).values({
+      teamId,
+      actorId: actor.id,
+      subjectUserId: userId,
+      action: 'removed',
+      fromRole: target.role,
+      toRole: null,
+    })
+  })
 }

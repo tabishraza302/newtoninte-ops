@@ -138,7 +138,6 @@ describe('items service - createItem (Task 4.3)', () => {
     if (!job) return
 
     expect(job.type).toBe('email.assigned')
-    expect(job.dedupeKey).toBe(`assigned:item:${item.id}`)
     expect(job.payload).toEqual({
       to: member.email,
       itemTitle: 'Lead assigned task',

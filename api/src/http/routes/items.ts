@@ -78,7 +78,7 @@ const assignItemBodySchema = z.object({
 
 const transitionItemBodySchema = z.object({
   to: z.enum(STATUSES),
-  reason: z.string().optional(),
+  reason: z.string().max(10000).optional(),
 })
 
 const addCommentBodySchema = z.object({
@@ -167,6 +167,9 @@ itemsRouter.post('/items', requireAuth(), async (req: Request, res: Response, ne
       : Array.isArray(idempotencyKeyHeader) && typeof idempotencyKeyHeader[0] === 'string'
         ? idempotencyKeyHeader[0].trim()
         : undefined
+    if (idempotencyKey !== undefined && idempotencyKey.length > 255) {
+      throw ApiError.of('VALIDATION_ERROR', 'Idempotency-Key header exceeds maximum length of 255 characters')
+    }
 
     if (idempotencyKey && idempotencyKey.length > 0) {
       const result = await withIdempotency(
@@ -198,18 +201,31 @@ itemsRouter.patch('/items/:id', requireAuth(), async (req: Request, res: Respons
   try {
     const actor = currentActor(req)
     const { id } = parse(itemIdParamSchema, req.params)
-
-    if (req.body && typeof req.body === 'object') {
-      if (
-        'status' in req.body ||
-        'assigneeId' in req.body ||
-        'assignee' in req.body ||
-        'assignee_id' in req.body
-      ) {
-        throw ApiError.of('VALIDATION_ERROR', 'status and assignee cannot be updated via PATCH')
-      }
+    const ALLOWED_PATCH_BODY_KEYS: Record<string, true> = {
+      title: true,
+      description: true,
+      type: true,
+      dueAt: true,
+      due_at: true,
+      priority: true,
+      version: true,
     }
 
+    if (req.body && typeof req.body === 'object') {
+      for (const k of Object.keys(req.body)) {
+        if (
+          k === 'status' ||
+          k === 'assigneeId' ||
+          k === 'assignee' ||
+          k === 'assignee_id'
+        ) {
+          throw ApiError.of('VALIDATION_ERROR', 'status and assignee cannot be updated via PATCH')
+        }
+        if (!ALLOWED_PATCH_BODY_KEYS[k]) {
+          throw ApiError.of('VALIDATION_ERROR', `Unknown field: ${k}`)
+        }
+      }
+    }
     const ifMatchHeader = Array.isArray(req.headers['if-match'])
       ? req.headers['if-match'][0]
       : req.headers['if-match']

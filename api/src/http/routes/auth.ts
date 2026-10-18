@@ -18,7 +18,12 @@ export const authRouter: Router = Router()
 
 const loginSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(1),
+  password: z
+    .string()
+    .min(1)
+    .refine((pw) => Buffer.byteLength(pw, 'utf8') <= 72, {
+      message: 'Password must not exceed 72 bytes',
+    }),
 })
 
 const forgotSchema = z.object({
@@ -27,7 +32,12 @@ const forgotSchema = z.object({
 
 const resetSchema = z.object({
   token: z.string().min(1),
-  password: z.string().min(8),
+  password: z
+    .string()
+    .min(8)
+    .refine((pw) => Buffer.byteLength(pw, 'utf8') <= 72, {
+      message: 'Password must not exceed 72 bytes',
+    }),
 })
 
 function sessionCtx(req: Request): { userAgent?: string; ip?: string } {
@@ -52,31 +62,37 @@ authRouter.post(
   },
 )
 
-authRouter.post('/auth/refresh', async (req: Request, res: Response) => {
-  const token = readRefreshCookie(req)
-  if (!token) {
-    throw ApiError.of('UNAUTHENTICATED')
+authRouter.post('/auth/refresh', async (req: Request, res: Response, next) => {
+  try {
+    const token = readRefreshCookie(req)
+    if (!token) {
+      throw ApiError.of('UNAUTHENTICATED')
+    }
+
+    const rotated = await rotate(token, sessionCtx(req))
+
+    const [user] = await db
+      .select(publicUserColumns)
+      .from(users)
+      .where(eq(users.id, rotated.userId))
+      .limit(1)
+
+    if (!user || user.status === 'disabled') {
+      throw ApiError.of('UNAUTHENTICATED')
+    }
+
+    const accessToken = await signAccessToken(rotated.userId)
+    setRefreshCookie(res, rotated.refreshToken)
+    res.status(200).json({
+      accessToken,
+      user,
+    })
+  } catch (err) {
+    if (err instanceof ApiError && err.code === 'UNAUTHENTICATED') {
+      clearRefreshCookie(res)
+    }
+    next(err)
   }
-
-  const rotated = await rotate(token, sessionCtx(req))
-
-  const accessToken = await signAccessToken(rotated.userId)
-
-  const [user] = await db
-    .select(publicUserColumns)
-    .from(users)
-    .where(eq(users.id, rotated.userId))
-    .limit(1)
-
-  if (!user || user.status === 'disabled') {
-    throw ApiError.of('UNAUTHENTICATED')
-  }
-
-  setRefreshCookie(res, rotated.refreshToken)
-  res.status(200).json({
-    accessToken,
-    user,
-  })
 })
 
 authRouter.post('/auth/logout', async (req: Request, res: Response) => {

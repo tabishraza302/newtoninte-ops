@@ -57,9 +57,6 @@ interface UserRow {
   password_hash: string
 }
 
-async function clearMailbox(): Promise<void> {
-  await fetch(MAILPIT_API, { method: 'DELETE' })
-}
 
 async function fetchOutboxJobs(): Promise<OutboxJobRow[]> {
   const [rows] = await pool.query(
@@ -100,7 +97,6 @@ async function fetchUser(userId: number): Promise<UserRow> {
 describe('password reset service (Task 2.14)', () => {
   beforeEach(async () => {
     await resetDb()
-    await clearMailbox()
   })
   afterAll(closeDb)
 
@@ -201,8 +197,9 @@ describe('password reset service (Task 2.14)', () => {
   })
 
   it('email.reset handler sends real email to Mailpit sink', async () => {
-    const to = 'resetuser@example.test'
-    const code = 'sample_reset_token_abc123'
+    const id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    const to = `resetuser_${id}@example.test`
+    const code = `sample_reset_token_${id}`
 
     const handler = handlers['email.reset']
     await handler({ to, code })
@@ -226,5 +223,35 @@ describe('password reset service (Task 2.14)', () => {
     const detail = (await detailRes.json()) as MailpitMessageDetail
     expect(detail.Text).toContain(`/reset-password?token=${code}`)
     expect(detail.HTML).toContain(`/reset-password?token=${code}`)
+  })
+
+  it('forgotPassword ignores disabled account and enqueues no jobs', async () => {
+    const user = await seedUser({ email: 'disabled-reset@example.test', status: 'disabled' })
+    await forgotPassword('disabled-reset@example.test')
+
+    const tokens = await fetchResetTokens(user.id)
+    expect(tokens).toHaveLength(0)
+    const jobs = await fetchOutboxJobs()
+    expect(jobs.filter((j) => j.type === 'email.reset')).toHaveLength(0)
+  })
+
+  it('resetPassword rejects disabled accounts and passwords exceeding 72 bytes', async () => {
+    const user = await seedUser({ email: 'target-reset@example.test', status: 'active' })
+    await forgotPassword('target-reset@example.test')
+    const jobs = await fetchOutboxJobs()
+    const rawPayload = jobs[0]!.payload
+    const payload = typeof rawPayload === 'string' ? JSON.parse(rawPayload) : rawPayload
+    const token = payload.code as string
+
+    // Password exceeding 72 bytes
+    await expect(resetPassword(token, 'a'.repeat(73))).rejects.toMatchObject({
+      code: 'VALIDATION_ERROR',
+    })
+
+    // Disable user
+    await pool.query('UPDATE users SET status = "disabled" WHERE id = ?', [user.id])
+    await expect(resetPassword(token, 'validpassword123')).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    })
   })
 })

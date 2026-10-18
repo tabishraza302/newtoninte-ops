@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { db } from '../../db/client'
 import { users } from '../../db/schema'
 import type { Actor } from '../../domain/types'
+import { ApiError } from '../errors'
 import { setRefreshCookie } from '../cookies'
 import { currentActor, requireAuth } from '../middleware/auth'
 import { parse } from '../validate'
@@ -19,8 +20,14 @@ const invitationIdParamSchema = z.object({
 const redeemSchema = z.object({
   code: z.string().min(1),
   email: z.string().email().optional(),
-  password: z.string().min(8).optional(),
-  displayName: z.string().min(1).max(255).optional(),
+  password: z
+    .string()
+    .min(8)
+    .refine((pw) => Buffer.byteLength(pw, 'utf8') <= 72, {
+      message: 'Password must not exceed 72 bytes',
+    })
+    .optional(),
+  displayName: z.string().trim().min(1).max(120).optional(),
 })
 
 async function resolveOptionalActor(req: Request): Promise<Actor | null> {
@@ -42,27 +49,26 @@ async function resolveOptionalActor(req: Request): Promise<Actor | null> {
     return null
   }
 
-  try {
-    const [user] = await db
-      .select({
-        id: users.id,
-        isAdmin: users.isAdmin,
-        status: users.status,
-      })
-      .from(users)
-      .where(eq(users.id, sub))
-      .limit(1)
+  const [user] = await db
+    .select({
+      id: users.id,
+      isAdmin: users.isAdmin,
+      status: users.status,
+    })
+    .from(users)
+    .where(eq(users.id, sub))
+    .limit(1)
 
-    if (!user || user.status === 'disabled') {
-      return null
-    }
-
-    return {
-      id: user.id,
-      isAdmin: Boolean(user.isAdmin),
-    }
-  } catch {
+  if (!user) {
     return null
+  }
+  if (user.status === 'disabled') {
+    throw ApiError.of('UNAUTHENTICATED')
+  }
+
+  return {
+    id: user.id,
+    isAdmin: Boolean(user.isAdmin),
   }
 }
 

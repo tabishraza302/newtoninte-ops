@@ -14,7 +14,7 @@
 import { Router, type Request, type Response } from 'express'
 import { z } from 'zod'
 import { outboxJobs } from '../../db/schema'
-import { OUTBOX_TYPES } from '../../domain/types'
+import { OUTBOX_TYPES, ROLES } from '../../domain/types'
 import { currentActor, requireAuth } from '../middleware/auth'
 import { parse, paginationSchema } from '../validate'
 import {
@@ -24,7 +24,8 @@ import {
   setUserStatus,
   type ListJobsQuery,
 } from '../../services/jobs'
-
+import { createUser, listUsers, type CreateUserInput, type ListUsersQuery } from '../../services/users'
+import { adminListTeamMembers, adminRemoveTeamMember } from '../../services/teams'
 export const adminRouter: Router = Router()
 
 // The filter values are enums, not free strings: an unknown status would
@@ -47,9 +48,44 @@ const userIdParamSchema = z.object({
   id: z.coerce.number().int().positive(),
 })
 
+const teamIdParamSchema = z.object({
+  id: z.coerce.number().int().positive(),
+})
+
+const teamMemberParamSchema = z.object({
+  id: z.coerce.number().int().positive(),
+  userId: z.coerce.number().int().positive(),
+})
+
 const setUserStatusBodySchema = z.object({
   status: z.enum(['active', 'disabled']),
 })
+const listUsersQuerySchema = paginationSchema.extend({
+  q: z.string().trim().optional(),
+})
+
+const createUserBodySchema = z
+  .object({
+    email: z.string().trim().email(),
+    displayName: z.string().trim().min(1).max(120),
+    password: z
+      .string()
+      .min(8)
+      .refine((pw) => Buffer.byteLength(pw, 'utf8') <= 72, {
+        message: 'Password must not exceed 72 bytes',
+      }),
+    teamId: z.coerce.number().int().positive().optional(),
+    role: z.enum(ROLES).optional(),
+  })
+  .refine(
+    (data) =>
+      (data.teamId === undefined && data.role === undefined) ||
+      (data.teamId !== undefined && data.role !== undefined),
+    {
+      message: 'teamId and role must be provided together',
+      path: ['teamId'],
+    },
+  )
 
 // GET /admin/jobs
 adminRouter.get('/admin/jobs', requireAuth(), async (req: Request, res: Response, next) => {
@@ -101,6 +137,67 @@ adminRouter.patch('/admin/users/:id', requireAuth(), async (req: Request, res: R
     const { id } = parse(userIdParamSchema, req.params)
     const { status } = parse(setUserStatusBodySchema, req.body)
     await setUserStatus(actor, id, status)
+    res.status(204).end()
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /admin/users
+adminRouter.get('/admin/users', requireAuth(), async (req: Request, res: Response, next) => {
+  try {
+    const actor = currentActor(req)
+    const query = parse(listUsersQuerySchema, req.query)
+    const listQuery: ListUsersQuery = {
+      limit: query.limit,
+      ...(query.q !== undefined ? { q: query.q } : {}),
+      ...(query.cursor !== undefined ? { cursor: query.cursor } : {}),
+    }
+    const result = await listUsers(actor, listQuery)
+    res.status(200).json(result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /admin/users
+adminRouter.post('/admin/users', requireAuth(), async (req: Request, res: Response, next) => {
+  try {
+    const actor = currentActor(req)
+    const body = parse(createUserBodySchema, req.body)
+    const createInput: CreateUserInput = {
+      email: body.email,
+      displayName: body.displayName,
+      password: body.password,
+      ...(body.teamId !== undefined ? { teamId: body.teamId } : {}),
+      ...(body.role !== undefined ? { role: body.role } : {}),
+    }
+    const user = await createUser(actor, createInput)
+    res.status(201).json({ user })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /admin/teams/:id/members
+adminRouter.get('/admin/teams/:id/members', requireAuth(), async (req: Request, res: Response, next) => {
+  try {
+    const actor = currentActor(req)
+    const { id } = parse(teamIdParamSchema, req.params)
+    const query = parse(paginationSchema, req.query)
+    const result = await adminListTeamMembers(actor, id, query)
+    res.status(200).json(result)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// DELETE /admin/teams/:id/members/:userId
+adminRouter.delete('/admin/teams/:id/members/:userId', requireAuth(), async (req: Request, res: Response, next) => {
+  try {
+    const actor = currentActor(req)
+    const { id, userId } = parse(teamMemberParamSchema, req.params)
+    await adminRemoveTeamMember(actor, id, userId)
     res.status(204).end()
   } catch (err) {
     next(err)

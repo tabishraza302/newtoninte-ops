@@ -50,6 +50,16 @@ export interface UserSummary {
   email: string
 }
 
+export interface PublicUser {
+  id: number
+  email: string
+  displayName: string
+  isAdmin: boolean
+  status: 'active' | 'disabled'
+  createdAt: string
+  updatedAt: string
+}
+
 export interface WorkItem {
   id: number
   teamId: number
@@ -105,7 +115,7 @@ export interface CreateItemInput {
   title: string
   description?: string | null
   type: ItemType
-  priority?: Priority
+  priority: Priority
   dueAt?: string | null
   assigneeId?: number | null
 }
@@ -124,8 +134,14 @@ export interface TransitionItemInput {
   reason?: string
 }
 
+export interface AssignItemInput {
+  id: number
+  assigneeId: number | null
+  expectedVersion: number
+}
+
 export interface MeResponse {
-  user: UserSummary
+  user: PublicUser
   memberships: Array<{ teamId: number; role: Role }>
 }
 
@@ -167,4 +183,148 @@ export interface JobStatusCounts {
 export interface JobsSummary {
   byStatus: JobStatusCounts
   oldestPendingAgeSec: number | null
+}
+
+// --- Admin User Provisioning & Management ---
+export interface ListAdminUsersQuery {
+  q?: string | undefined
+  cursor?: string | undefined
+  limit?: number | undefined
+}
+
+export interface ListAdminUsersResponse {
+  users: PublicUser[]
+  nextCursor: string | null
+  userCreationEnabled: boolean
+}
+
+export interface CreateAdminUserInput {
+  email: string
+  displayName: string
+  password: string
+  teamId?: number | undefined
+  role?: Role | undefined
+}
+
+export interface CreateAdminUserResponse {
+  user: PublicUser
+}
+
+export interface SetUserStatusInput {
+  id: number
+  status: 'active' | 'disabled'
+}
+
+// --- Team Management & Direct Membership ---
+
+export interface CreateTeamInput {
+  name: string
+  slug: string
+}
+
+export interface CreateTeamResponse {
+  team: Team
+}
+
+export interface AddTeamMemberInput {
+  teamId: number
+  userId: number
+  role: Role
+}
+
+// --- Team Scoped Members & Invitations (§7.4, §10) ---
+
+export interface TeamMember {
+  id: number
+  userId: number
+  teamId: number
+  role: Role
+  createdAt: string
+  updatedAt: string
+  user: UserSummary
+}
+
+export interface ListMembersResponse {
+  members: TeamMember[]
+  nextCursor: string | null
+}
+
+export interface SetMemberRoleInput {
+  teamId: number
+  userId: number
+  role: Role
+}
+
+export interface RemoveMemberInput {
+  teamId: number
+  userId: number
+}
+
+export interface TeamInvitation {
+  id: number
+  teamId: number
+  email: string
+  role: Role
+  uses: number
+  maxUses: number
+  expiresAt: string | null
+  revokedAt: string | null
+  createdAt: string
+}
+
+export interface ListInvitationsResponse {
+  invitations: TeamInvitation[]
+  nextCursor: string | null
+}
+
+export interface CreateInvitationInput {
+  teamId: number
+  email: string
+  role: Role
+  maxUses?: number
+}
+
+export interface AdminTeamMember {
+  id: number
+  userId: number
+  teamId: number
+  role: Role
+  createdAt: string
+  user: {
+    id: number
+    email: string
+    displayName: string
+  }
+}
+
+export interface ListAdminTeamMembersResponse {
+  members: AdminTeamMember[]
+  nextCursor: string | null
+}
+
+// --- Comments (§9, §10) ---
+
+export interface Comment {
+  id: number
+  workItemId: number
+  authorId: number
+  body: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface AddCommentInput {
+  itemId: number
+  body: string
+}
+
+// --- Password Reset Flow (§11.2) ---
+
+export interface ForgotPasswordInput {
+  email: string
+}
+
+export interface ResetPasswordInput {
+  token: string
+  password: string
 }

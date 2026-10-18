@@ -385,6 +385,11 @@ describe('OutboxJobs Page (Task 5.4)', () => {
           jsonResponse({ accessToken: 'tok', user: authValue().user }),
         )
       }
+      if (url.includes('/auth/me')) {
+        return Promise.resolve(
+          jsonResponse({ user: authValue().user, memberships: [] }),
+        )
+      }
       if (url.startsWith('/admin/jobs/summary')) {
         return Promise.resolve(jsonResponse(summary))
       }
@@ -415,6 +420,11 @@ describe('OutboxJobs Page (Task 5.4)', () => {
             jsonResponse({ accessToken: 'tok', user: { ...authValue().user, isAdmin } }),
           )
         }
+        if (url.includes('/auth/me')) {
+          return Promise.resolve(
+            jsonResponse({ user: { ...authValue().user, isAdmin }, memberships: [] }),
+          )
+        }
         return Promise.resolve(new Response(JSON.stringify({ error: 'not found' }), { status: 404 }))
       })
     }
@@ -443,5 +453,31 @@ describe('OutboxJobs Page (Task 5.4)', () => {
       expect(screen.getByText(/Newtonite Operations/)).toBeInTheDocument()
     })
     expect(screen.queryByRole('link', { name: /Outbox Jobs/i })).not.toBeInTheDocument()
+  })
+
+  it('clicking Inspect displays job details modal/drawer with deduplication key and error details', async () => {
+    mockAdminApi([failedJob])
+    await renderJobs()
+
+    await waitFor(() => {
+      expect(screen.getByRole('row', { name: /email\.assigned/i })).toBeInTheDocument()
+    })
+
+    const inspectBtn = screen.getByLabelText('Inspect job #7')
+    fireEvent.click(inspectBtn)
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toBeInTheDocument()
+
+    const withinDialog = within(dialog)
+    expect(withinDialog.getByRole('heading', { name: /Job Details #7/i })).toBeInTheDocument()
+    expect(withinDialog.getByText('item:1:assigned:2')).toBeInTheDocument()
+    expect(withinDialog.getByText('SMTP connect ECONNREFUSED')).toBeInTheDocument()
+    expect(withinDialog.getByText(/3 of 3/i)).toBeInTheDocument()
+    const closeBtn = screen.getByLabelText('Close inspector')
+    fireEvent.click(closeBtn)
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    })
   })
 })

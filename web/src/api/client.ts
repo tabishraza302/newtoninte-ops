@@ -1,13 +1,28 @@
 let accessToken: string | null = null
+let sessionEpoch = 0
+let refreshPromise: Promise<string | null> | null = null
+let refreshEpoch = 0
+let refreshAbortController: AbortController | null = null
 
 export function setAccessToken(t: string | null): void {
   accessToken = t
+  sessionEpoch++
+  if (refreshAbortController) {
+    refreshAbortController.abort()
+    refreshAbortController = null
+  }
+  refreshPromise = null
 }
-
 export function getAccessToken(): string | null {
   return accessToken
 }
 
+type UnauthorizedHandler = () => void
+let onUnauthorizedHandler: UnauthorizedHandler | null = null
+
+export function setOnUnauthorized(handler: UnauthorizedHandler | null): void {
+  onUnauthorizedHandler = handler
+}
 export interface ApiFetchOptions extends RequestInit {
   json?: unknown
 }
@@ -39,13 +54,76 @@ async function parseResponseBody<T>(res: Response): Promise<T> {
   }
 }
 
+async function requestRefresh(epoch: number): Promise<string | null> {
+  if (refreshPromise && refreshEpoch === epoch) {
+    return refreshPromise
+  }
+
+  refreshEpoch = epoch
+  const abortController = new AbortController()
+  refreshAbortController = abortController
+
+  const p = (async () => {
+    try {
+      const res = await fetch('/auth/refresh', {
+        method: 'POST',
+        credentials: 'include',
+        signal: abortController.signal,
+      })
+
+      if (sessionEpoch !== epoch || abortController.signal.aborted) {
+        return null
+      }
+
+      if (res.ok && res.status === 200) {
+        const data = (await res.json()) as { accessToken?: string }
+        if (sessionEpoch !== epoch || abortController.signal.aborted) {
+          return null
+        }
+        if (typeof data.accessToken === 'string') {
+          // Internal assignment preserves current session epoch
+          accessToken = data.accessToken
+          return data.accessToken
+        }
+      }
+
+      // Refresh failed or returned invalid payload
+      if (sessionEpoch === epoch && !abortController.signal.aborted) {
+        accessToken = null
+        sessionEpoch++
+        onUnauthorizedHandler?.()
+      }
+      return null
+    } catch (err) {
+      if (abortController.signal.aborted || sessionEpoch !== epoch) {
+        return null
+      }
+      accessToken = null
+      sessionEpoch++
+      onUnauthorizedHandler?.()
+      throw err
+    } finally {
+      if (refreshEpoch === epoch) {
+        refreshPromise = null
+      }
+      if (refreshAbortController === abortController) {
+        refreshAbortController = null
+      }
+    }
+  })()
+
+  refreshPromise = p
+  return p
+}
+
 export async function apiFetch<T>(path: string, init?: ApiFetchOptions): Promise<T> {
+  const requestEpoch = sessionEpoch
+  const requestToken = accessToken
   const headers = new Headers(init?.headers)
 
   if (accessToken) {
     headers.set('Authorization', `Bearer ${accessToken}`)
   }
-
   let body = init?.body
   if (init?.json !== undefined) {
     body = JSON.stringify(init.json)
@@ -64,54 +142,75 @@ export async function apiFetch<T>(path: string, init?: ApiFetchOptions): Promise
   const res = await fetch(path, reqInit)
 
   if (res.status === 401) {
-    let refreshRes: Response
-    try {
-      refreshRes = await fetch('/auth/refresh', {
-        method: 'POST',
-        credentials: 'include',
-      })
-    } catch (err) {
-      setAccessToken(null)
-      throw err
-    }
-
-    if (refreshRes.ok && refreshRes.status === 200) {
-      const data = (await refreshRes.json()) as { accessToken?: string }
-      if (typeof data.accessToken === 'string') {
-        setAccessToken(data.accessToken)
-
-        const retryHeaders = new Headers(init?.headers)
-        retryHeaders.set('Authorization', `Bearer ${data.accessToken}`)
-        if (init?.json !== undefined && !retryHeaders.has('Content-Type')) {
-          retryHeaders.set('Content-Type', 'application/json')
-        }
-
-        const retryInit: RequestInit = {
-          ...baseInit,
-          headers: retryHeaders,
-          credentials: 'include',
-          ...(body !== undefined ? { body } : {}),
-        }
-        const retryRes = await fetch(path, retryInit)
-        if (!retryRes.ok) {
-          if (retryRes.status === 401) {
-            setAccessToken(null)
-          }
-          const errorBody = await parseResponseBody<unknown>(retryRes)
-          throw new ApiError(
-            retryRes.status,
-            `Request failed with status ${retryRes.status}`,
-            errorBody,
-          )
-        }
-
-        return parseResponseBody<T>(retryRes)
-      }
-    }
-
-    setAccessToken(null)
     const errBody = await parseResponseBody<unknown>(res)
-    throw new ApiError(401, 'Unauthorized', errBody)
+
+    // Skip automatic refresh on login, refresh, and password auth endpoints
+    const pathname = path.startsWith('http://') || path.startsWith('https://')
+      ? new URL(path).pathname
+      : (path.split('?')[0] ?? '').split('#')[0] ?? ''
+
+    const isAuthEndpoint =
+      pathname === '/auth/login' ||
+      pathname === '/auth/refresh' ||
+      pathname.startsWith('/auth/password/') ||
+      pathname === '/auth/logout'
+
+    if (isAuthEndpoint) {
+      throw new ApiError(401, 'Unauthorized', errBody)
+    }
+
+    // If session changed while request was in-flight, do not refresh or replay
+    if (sessionEpoch !== requestEpoch) {
+      throw new ApiError(401, 'Unauthorized', errBody)
+    }
+
+    // If another concurrent request in this epoch already refreshed the token,
+    // reuse the current token instead of rotating again.
+    let refreshedToken: string | null = null
+    if (accessToken !== null && accessToken !== requestToken) {
+      refreshedToken = accessToken
+    } else {
+      refreshedToken = await requestRefresh(requestEpoch)
+    }
+
+    // If session changed during refresh, or refresh failed to produce a token
+    if (sessionEpoch !== requestEpoch || !refreshedToken) {
+      throw new ApiError(401, 'Unauthorized', errBody)
+    }
+    const retryHeaders = new Headers(init?.headers)
+    retryHeaders.set('Authorization', `Bearer ${refreshedToken}`)
+    if (init?.json !== undefined && !retryHeaders.has('Content-Type')) {
+      retryHeaders.set('Content-Type', 'application/json')
+    }
+
+    const retryInit: RequestInit = {
+      ...baseInit,
+      headers: retryHeaders,
+      credentials: 'include',
+      ...(body !== undefined ? { body } : {}),
+    }
+
+    const retryRes = await fetch(path, retryInit)
+    if (!retryRes.ok) {
+      if (retryRes.status === 401 && sessionEpoch === requestEpoch) {
+        accessToken = null
+        sessionEpoch++
+        onUnauthorizedHandler?.()
+      }
+      const retryErrorBody = await parseResponseBody<unknown>(retryRes)
+      throw new ApiError(
+        retryRes.status,
+        `Request failed with status ${retryRes.status}`,
+        retryErrorBody,
+      )
+    }
+
+    const retryParsed = await parseResponseBody<T>(retryRes)
+    if (sessionEpoch !== requestEpoch) {
+      throw new ApiError(401, 'Unauthorized', undefined)
+    }
+
+    return retryParsed
   }
 
   if (!res.ok) {
@@ -119,5 +218,10 @@ export async function apiFetch<T>(path: string, init?: ApiFetchOptions): Promise
     throw new ApiError(res.status, `Request failed with status ${res.status}`, errorBody)
   }
 
-  return parseResponseBody<T>(res)
+  const parsed = await parseResponseBody<T>(res)
+  if (sessionEpoch !== requestEpoch) {
+    throw new ApiError(401, 'Unauthorized', undefined)
+  }
+
+  return parsed
 }
