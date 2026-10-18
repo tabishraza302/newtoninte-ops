@@ -3,7 +3,7 @@ import { aliasedTable } from 'drizzle-orm'
 import { db } from '../db/client'
 import { activityEvents, comments, teams, users, workItems } from '../db/schema'
 import type { CommentRow } from '../db/schema'
-import { withTransaction } from '../db/tx'
+import { withTransaction, type Tx } from '../db/tx'
 import { buildPage, decodeCursor, DEFAULT_LIMIT, MAX_LIMIT } from '../http/cursor'
 import { ApiError } from '../http/errors'
 import { authorize, membershipsOf, roleIn, scopeTeamIds } from '../policy'
@@ -229,11 +229,11 @@ export async function listItems(
  * Fetches a single work item by ID.
  * Throws NOT_FOUND (404) if item does not exist or if actor is not a member of its team.
  */
-export async function getItem(actor: Actor, id: number): Promise<WorkItemRow> {
+export async function getItem(actor: Actor, id: number, executor: Tx | typeof db = db): Promise<WorkItemRow> {
   const creator = aliasedTable(users, 'creator')
   const assignee = aliasedTable(users, 'assignee')
 
-  const [row] = await db
+  const [row] = await executor
     .select({
       item: workItems,
       creator: {
@@ -372,7 +372,7 @@ export interface CreateItemInput {
  * Writes `created` event with initial metadata; writes `assignee_changed` if assigned.
  * Enqueues `email.assigned` if assigned to another user.
  */
-export async function createItem(actor: Actor, input: CreateItemInput): Promise<WorkItemRow> {
+export async function createItem(actor: Actor, input: CreateItemInput, externalTx?: Tx): Promise<WorkItemRow> {
   await authorize(actor, 'item:create', { kind: 'team', teamId: input.teamId })
 
   if (!input.title || typeof input.title !== 'string' || input.title.trim().length === 0 || input.title.length > 200) {
@@ -407,7 +407,7 @@ export async function createItem(actor: Actor, input: CreateItemInput): Promise<
     }
   }
 
-  const insertedId = await withTransaction(async (tx) => {
+  const runTx = async (tx: Tx) => {
     const [result] = await tx.insert(workItems).values({
       teamId: input.teamId,
       title: input.title.trim(),
@@ -476,8 +476,14 @@ export async function createItem(actor: Actor, input: CreateItemInput): Promise<
     }
 
     return id
-  })
+  }
 
+  if (externalTx) {
+    const insertedId = await runTx(externalTx)
+    return getItem(actor, insertedId, externalTx)
+  }
+
+  const insertedId = await withTransaction(runTx)
   return getItem(actor, insertedId)
 }
 

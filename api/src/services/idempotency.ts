@@ -45,6 +45,19 @@ export interface IdempotencyHandlerResult<T> {
   body: T
   resourceId?: number
 }
+function isDupEntry(err: unknown): boolean {
+  const errno = (err as { errno?: unknown } | null | undefined)?.errno
+  const cause = (err as { cause?: unknown } | null | undefined)?.cause
+  const causeErrno = (cause as { errno?: unknown } | null | undefined)?.errno
+  const code = (err as { code?: unknown } | null | undefined)?.code
+  const causeCode = (cause as { code?: unknown } | null | undefined)?.code
+  return (
+    errno === 1062 ||
+    causeErrno === 1062 ||
+    code === 'ER_DUP_ENTRY' ||
+    causeCode === 'ER_DUP_ENTRY'
+  )
+}
 
 /**
  * Executes `fn` with idempotency guarantees within a transaction.
@@ -58,54 +71,73 @@ export async function withIdempotency<T>(
 ): Promise<IdempotencyResult<T>> {
   const currentHash = requestHash(body)
 
-  return await withTransaction(async (tx) => {
-    const [existing] = await tx
-      .select()
-      .from(idempotencyKeys)
-      .where(and(eq(idempotencyKeys.userId, actorId), eq(idempotencyKeys.key, key)))
-      .for('update')
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      return await withTransaction(async (tx) => {
+        const [existing] = await tx
+          .select()
+          .from(idempotencyKeys)
+          .where(and(eq(idempotencyKeys.userId, actorId), eq(idempotencyKeys.key, key)))
+          .for('update')
 
-    if (existing) {
-      const now = new Date()
-      const isExpired = existing.expiresAt.getTime() <= now.getTime()
+        if (existing) {
+          const now = new Date()
+          const isExpired = existing.expiresAt.getTime() <= now.getTime()
 
-      if (!isExpired) {
-        if (existing.requestHash !== currentHash) {
-          throw ApiError.of('IDEMPOTENCY_KEY_MISMATCH')
+          if (!isExpired) {
+            if (existing.requestHash !== currentHash) {
+              throw ApiError.of('IDEMPOTENCY_KEY_MISMATCH')
+            }
+
+            return {
+              status: existing.responseStatus,
+              body: existing.responseBody as T,
+              replayed: true,
+            }
+          }
+
+          await tx
+            .delete(idempotencyKeys)
+            .where(eq(idempotencyKeys.id, existing.id))
         }
+
+        const res = await fn(tx)
+
+        const ttlSec = config.idempotencyTtlSec
+        const expiresAt = new Date(Date.now() + ttlSec * 1000)
+
+        await tx.insert(idempotencyKeys).values({
+          userId: actorId,
+          key,
+          endpoint,
+          requestHash: currentHash,
+          responseStatus: res.status,
+          responseBody: res.body,
+          resourceId: res.resourceId ?? null,
+          expiresAt,
+        })
+
+        const [insertedRow] = await tx
+          .select({ responseBody: idempotencyKeys.responseBody })
+          .from(idempotencyKeys)
+          .where(and(eq(idempotencyKeys.userId, actorId), eq(idempotencyKeys.key, key)))
+          .limit(1)
 
         return {
-          status: existing.responseStatus,
-          body: existing.responseBody as T,
-          replayed: true,
+          status: res.status,
+          body: (insertedRow?.responseBody as T) ?? res.body,
+          replayed: false,
         }
+      })
+    } catch (err: unknown) {
+      if (isDupEntry(err) && attempt < 4) {
+        const { promise, resolve } = Promise.withResolvers<void>()
+        setTimeout(resolve, 10 * (attempt + 1) + Math.random() * 20)
+        await promise
+        continue
       }
-
-      await tx
-        .delete(idempotencyKeys)
-        .where(eq(idempotencyKeys.id, existing.id))
+      throw err
     }
-
-    const res = await fn(tx)
-
-    const ttlSec = config.idempotencyTtlSec
-    const expiresAt = new Date(Date.now() + ttlSec * 1000)
-
-    await tx.insert(idempotencyKeys).values({
-      userId: actorId,
-      key,
-      endpoint,
-      requestHash: currentHash,
-      responseStatus: res.status,
-      responseBody: res.body,
-      resourceId: res.resourceId ?? null,
-      expiresAt,
-    })
-
-    return {
-      status: res.status,
-      body: res.body,
-      replayed: false,
-    }
-  })
+  }
+  throw new Error('unreachable')
 }
