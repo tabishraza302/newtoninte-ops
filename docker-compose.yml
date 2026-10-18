@@ -1,0 +1,68 @@
+# Newtonite Ops — single-origin dev stack.
+#
+#   docker compose up --build
+#
+# Web (:8080) serves the built SPA and reverse-proxies /auth /items /teams
+# /invitations /admin /health /ready to the api service, so the browser only
+# ever talks to one origin. MySQL (:3306) and the Mailpit UI (:8025) are also
+# published for local tooling.
+#
+# The `api` service reads its configuration from `.env` (copy `.env.example`),
+# with the web origin overridden below so invite/reset links point at :8080.
+#
+# NOTE: build contexts are the repository root (not ./api and ./web) because
+# this is a Bun workspace: the single `bun.lock` and `tsconfig.base.json` live
+# at the root, and `bun install --frozen-lockfile` needs them in the image.
+
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: newtonite
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  mailpit:
+    image: axllent/mailpit
+    ports:
+      - "1025:1025" # SMTP
+      - "8025:8025" # Web UI / HTTP API
+
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    # Migrate + idempotent seed before serving. The Dockerfile WORKDIR is
+    # /app/api, so these scripts resolve to the api workspace.
+    command: ["sh", "-c", "bun run db:migrate && bun run seed && bun run start"]
+    env_file:
+      - .env
+    environment:
+      # Invite / password-reset links must point at the web origin, not :5173.
+      APP_BASE_URL: http://localhost:8080
+    ports:
+      - "3000:3000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+
+volumes:
+  mysql_data:

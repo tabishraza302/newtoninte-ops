@@ -1,0 +1,14 @@
+{
+  "name": "newtonite-ops",
+  "private": true,
+  "workspaces": ["api", "web"],
+  "scripts": {
+    "dev": "concurrently -n api,web -c blue,magenta \"bun --cwd api dev\" \"bun --cwd web dev\"",
+    "test": "bun --cwd api test && bun --cwd web test",
+    "typecheck": "bun --cwd api typecheck && bun --cwd web typecheck",
+    "db:migrate": "bun --cwd api db:migrate",
+    "db:reset": "bun --cwd api db:reset",
+    "seed": "bun --cwd api seed"
+  },
+  "devDependencies": { "concurrently": "^9.1.0" }
+}
