@@ -128,3 +128,43 @@ export interface MeResponse {
   user: UserSummary
   memberships: Array<{ teamId: number; role: Role }>
 }
+
+export const JOB_TYPES = ['email.invite', 'email.reset', 'email.assigned'] as const
+export type JobType = (typeof JOB_TYPES)[number]
+
+export const JOB_STATUSES = ['pending', 'processing', 'done', 'failed'] as const
+export type JobStatus = (typeof JOB_STATUSES)[number]
+
+export interface JobView {
+  id: number
+  type: JobType
+  status: JobStatus
+  attempts: number
+  maxAttempts: number
+  lastError: string | null
+  dedupeKey: string
+  availableAt: string
+  lockedAt: string | null
+  lockedBy: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ListJobsQuery {
+  status?: JobStatus
+  type?: JobType
+  cursor?: string
+  limit?: number
+}
+
+export interface JobStatusCounts {
+  pending: number
+  processing: number
+  done: number
+  failed: number
+}
+
+export interface JobsSummary {
+  byStatus: JobStatusCounts
+  oldestPendingAgeSec: number | null
+}
