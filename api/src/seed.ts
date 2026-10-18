@@ -63,29 +63,52 @@ const TITLE_SUBJECTS = [
 
 const DAY_MS = 86_400_000
 const OVERDUE_ANCHOR = Date.UTC(2025, 5, 1) // 2025-06-01
-const UPCOMING_ANCHOR = Date.UTC(2027, 0, 1) // 2027-01-01
+const UPCOMING_ANCHOR = Date.UTC(2035, 0, 1) // 2035-01-01 — far enough out that "future due" never decays into "overdue"
 
-// Terminal statuses per domain/types.ts — items in these are never overdue.
+// A 60-slot status cycle — the lcm of the 2/4/5 attribute moduli below, so
+// every row's attributes are a pure function of its slot. Open dominates like
+// a real ops backlog; all six domain statuses appear. Weights are in STATUSES
+// order (domain/types.ts): open 24, in_progress 12, awaiting_approval 6,
+// resolved 9, closed 6, cancelled 3.
+const STATUS_WEIGHTS: readonly number[] = [24, 12, 6, 9, 6, 3]
+const STATUS_CYCLE: Status[] = STATUSES.flatMap((status, idx) => Array<Status>(STATUS_WEIGHTS[idx]!).fill(status))
+
+// Cycle slots [0, 15) are open-and-unassigned: exactly 15/60 = 25% of all
+// items. Every unassigned item is open — spec §6 allows a NULL assignee only
+// for open items (an item is never in_progress without an assignee).
+const UNASSIGNED_SLOTS = 15
+
+// Terminal statuses per spec §6: only closed and cancelled. Resolved items can
+// still transition (to closed, or reopen to in_progress), so they are not
+// terminal and can be overdue.
 function isTerminal(status: Status): boolean {
-  return status === 'resolved' || status === 'closed' || status === 'cancelled'
+  return status === 'closed' || status === 'cancelled'
 }
 
 /**
  * Builds `count` deterministic work-item rows continuing the global sequence
  * at `startIndex`. Every modulo index is in range, so the non-null assertions
- * always hold. Roughly 20% of non-terminal items get a past `dueAt`; terminal
- * items are always past due; the rest get a future one.
+ * always hold. A past `dueAt` goes only to non-terminal items on a 1-in-5
+ * cadence (~20% of non-terminal items overdue); every other item — terminal
+ * ones included — gets a far-future due date. Only open items are unassigned
+ * (spec §6); assignees and creators are the lead and member users only.
  */
 function buildItemRows(startIndex: number, count: number, demoTeams: TeamRow[], assigneeIds: number[]): NewWorkItem[] {
   const rows: NewWorkItem[] = []
   for (let n = 0; n < count; n++) {
     const i = startIndex + n
+    const slot = i % STATUS_CYCLE.length
     const team = demoTeams[i % demoTeams.length]!
     const type = ITEM_TYPES[i % ITEM_TYPES.length]!
     const priority = PRIORITIES[i % PRIORITIES.length]!
-    const status = STATUSES[i % STATUSES.length]!
+    const status = STATUS_CYCLE[slot]!
+    // (i >> 1) & 1 alternates lead/member with period 4, decorrelated from the
+    // team (i % 2); the creator is the other of the two.
+    const assigneeSlot = (i >> 1) & 1
+    const assigneeId = slot < UNASSIGNED_SLOTS ? null : assigneeIds[assigneeSlot]!
+    const createdBy = assigneeIds[1 - assigneeSlot]!
     const dueAt =
-      isTerminal(status) || i % 5 === 0
+      !isTerminal(status) && i % 5 === 0
         ? new Date(OVERDUE_ANCHOR - ((i % 30) + 1) * DAY_MS)
         : new Date(UPCOMING_ANCHOR + (i % 60) * DAY_MS)
     rows.push({
@@ -95,8 +118,8 @@ function buildItemRows(startIndex: number, count: number, demoTeams: TeamRow[], 
       type,
       priority,
       status,
-      assigneeId: i % 4 === 3 ? null : assigneeIds[i % assigneeIds.length]!,
-      createdBy: assigneeIds[i % assigneeIds.length]!,
+      assigneeId,
+      createdBy,
       dueAt,
     })
   }
@@ -151,7 +174,8 @@ export async function runSeed(db: Db): Promise<SeedCounts> {
   const existingItems = existingItemsRow?.items ?? 0
   const shortfall = Math.max(0, TARGET_ITEMS - existingItems)
   if (shortfall > 0) {
-    const assigneeIds = DEMO_USERS.filter((u) => u.role).map((u) => userIdByEmail.get(u.email)!)
+    // Only lead and member receive items — a viewer has no write role (§7).
+    const assigneeIds = DEMO_USERS.filter((u) => u.role === 'lead' || u.role === 'member').map((u) => userIdByEmail.get(u.email)!)
     const itemRows = buildItemRows(existingItems, shortfall, [opsTeam, financeTeam], assigneeIds)
     for (let offset = 0; offset < itemRows.length; offset += INSERT_CHUNK_SIZE) {
       await db.insert(workItems).values(itemRows.slice(offset, offset + INSERT_CHUNK_SIZE))
