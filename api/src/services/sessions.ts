@@ -177,9 +177,15 @@ export async function revokeFamily(familyId: string): Promise<void> {
 
 /**
  * Revokes all active refresh tokens for a user across all families.
+ *
+ * `tx` lets a caller revoke in the same transaction as the change that
+ * motivates it — disabling an account writes the status flip and the
+ * revocation together, so no committed state has a disabled account with a
+ * live refresh family (`issueFamily` takes a `tx` for the same reason).
  */
-export async function revokeAllForUser(userId: number): Promise<void> {
-  await db
+export async function revokeAllForUser(userId: number, tx?: Tx): Promise<void> {
+  const runner = tx ?? db
+  await runner
     .update(refreshTokens)
     .set({ revokedAt: sql`CURRENT_TIMESTAMP(3)` })
     .where(and(eq(refreshTokens.userId, userId), isNull(refreshTokens.revokedAt)))
