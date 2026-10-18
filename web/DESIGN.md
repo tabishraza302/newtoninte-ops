@@ -208,6 +208,22 @@ Surfaces rely on structural 1px borders and tonal layering.
 - **Style:** Flexbox row, padding `0.875rem 1.25rem`, border-bottom `1px solid #f1f5f9`, background white (`#ffffff`).
 - **Typography:** Monospace item ID (`ui-monospace`), tabular due date alignment.
 
+### Administrative Teams
+- **Selection Above Roster:** A searchable, paginated team picker sits above one full-width members panel, rather than a permanent directory column beside the roster.
+- **Compact Membership Rows:** Keep member name and email together, with role controls and removal actions in the same row. On narrow screens, constrain long team names and slugs to the picker width and keep any table overflow local.
+- **Stable Search and Selection:** Search inputs preserve typed whitespace while results use trimmed search terms. Equivalent searches retain loaded results; closing the user-provisioning form restores the initial team-picker page on reopening.
+
+### Collaboration Notifications
+- **Shared Topbar Bell:** Shared member/admin bell icon in the fixed 56px header featuring a 20px authored SVG bell inside a 44x44 square touch target (`min-width: 44px`, `min-height: 44px`), unread badge with a 99+ cap, and accessible name specifying exact unread count.
+- **Real-Time Stream Delivery:** Persistent authenticated Server-Sent Events (SSE) via `/notifications/stream` replacing 30s periodic polling. Initial connection establishes a per-user baseline snapshot to avoid toasting existing history, while subsequent snapshots catch up on missed notifications with automatic deduplication and exponential reconnect backoff.
+- **Dismissible Live Toasts:** New collaboration events produce floating dismissible toasts displaying actor name, action badge, and direct work item link (navigating links does not auto-mark notifications as read). Positioned fixed below the header (`top: 72px`, `right: 16px` on desktop, `inset: 16px` on mobile), toasts are bounded by a FIFO queue displaying a maximum of 3 cards simultaneously. Cards feature an ~8s auto-dismiss timer that pauses on hover and keyboard focus, alongside a minimum 44px close button.
+- **Directly Responsible Recipients:** Notifications target only directly responsible recipients with the actor excluded:
+  - Item assignment: new assignee.
+  - Comments and workflow decisions: item creator and current assignee.
+  - Approval requests: team leads.
+- **Explicit Read Controls:** Explicit read controls via per-notification "Mark as read" and batch "Mark all as read" buttons with minimum 44px touch targets; navigating item deep links does not auto-mark notifications as read.
+- **Membership Filtering:** Current team membership filters visible notification history and unread count; retained history reappears upon rejoining the team.
+- **Delivery Channels:** Existing email notification coverage remains unchanged alongside in-app collaboration inbox delivery.
 ## Do's and Don'ts
 
 ### Do:

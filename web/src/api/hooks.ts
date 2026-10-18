@@ -8,13 +8,15 @@ import {
   type UseInfiniteQueryResult,
   type InfiniteData,
 } from '@tanstack/react-query'
-import { apiFetch } from './client'
+import { apiFetch, ApiError } from './client'
 import type {
   ActivityEvent,
   AddCommentInput,
   AddTeamMemberInput,
+  AdminAuditEvent,
   AdminTeamMember,
   AssignItemInput,
+  CollaborationNotification,
   Comment,
   CreateAdminUserInput,
   CreateAdminUserResponse,
@@ -25,6 +27,10 @@ import type {
   ForgotPasswordInput,
   JobView,
   JobsSummary,
+  ListAdminAuditQuery,
+  ListAdminAuditResponse,
+  ListAdminTeamsQuery,
+  ListAdminTeamsResponse,
   ListAdminTeamMembersResponse,
   ListAdminUsersQuery,
   ListAdminUsersResponse,
@@ -32,7 +38,10 @@ import type {
   ListItemsQuery,
   ListJobsQuery,
   ListMembersResponse,
+  ListNotificationsResponse,
   MeResponse,
+  NotificationsSummary,
+  NotificationType,
   PatchItemInput,
   PublicUser,
   RemoveMemberInput,
@@ -422,12 +431,58 @@ export function useAdminRemoveTeamMember(): UseMutationResult<
         method: 'DELETE',
       }),
     onSuccess: (_data, vars) => {
-      void queryClient.invalidateQueries({ queryKey: ['admin', 'teams', vars.teamId, 'members'] })
+      void queryClient.invalidateQueries({
+        queryKey: ['admin', 'teams', vars.teamId, 'members'],
+        refetchType: 'none',
+      })
       void queryClient.invalidateQueries({ queryKey: ['teams', vars.teamId, 'members'] })
-      void queryClient.invalidateQueries({ queryKey: ['teams'] })
     },
   })
 }
+export function buildAdminTeamsQueryString(query: ListAdminTeamsQuery = {}): string {
+  const params = new URLSearchParams()
+  if (query.q) params.set('q', query.q)
+  if (query.cursor) params.set('cursor', query.cursor)
+  if (query.limit !== undefined) params.set('limit', String(query.limit))
+  const qs = params.toString()
+  return qs ? `/admin/teams?${qs}` : '/admin/teams'
+}
+
+export function useAdminTeams(
+  query: ListAdminTeamsQuery = {},
+  options?: { enabled?: boolean },
+): UseQueryResult<ListAdminTeamsResponse, Error> {
+  const path = buildAdminTeamsQueryString(query)
+  return useQuery<ListAdminTeamsResponse, Error>({
+    queryKey: ['admin-teams', query],
+    queryFn: () => apiFetch<ListAdminTeamsResponse>(path),
+    enabled: options?.enabled ?? true,
+  })
+}
+
+export function useAdminSetTeamMemberRole(): UseMutationResult<
+  { status: string },
+  Error,
+  SetMemberRoleInput
+> {
+  const queryClient = useQueryClient()
+  return useMutation<{ status: string }, Error, SetMemberRoleInput>({
+    mutationFn: ({ teamId, userId, role }) =>
+      apiFetch<{ status: string }>(`/admin/teams/${teamId}/members/${userId}`, {
+        method: 'PATCH',
+        json: { role },
+      }),
+    onSuccess: (_data, vars) => {
+      void queryClient.invalidateQueries({
+        queryKey: ['admin', 'teams', vars.teamId, 'members'],
+        refetchType: 'none',
+      })
+      void queryClient.invalidateQueries({ queryKey: ['teams', vars.teamId, 'members'] })
+      void queryClient.invalidateQueries({ queryKey: ['auth-me'] })
+    },
+  })
+}
+
 
 // --- Teams & Team Members ---
 
@@ -455,6 +510,7 @@ export function useCreateTeam(): UseMutationResult<
         return { ...old, teams: [...old.teams, data.team] }
       })
       void queryClient.invalidateQueries({ queryKey: ['teams'] })
+      void queryClient.invalidateQueries({ queryKey: ['admin-teams'] })
     },
   })
 }
@@ -472,9 +528,11 @@ export function useAddTeamMember(): UseMutationResult<
         json: { userId, role },
       }),
     onSuccess: (_data, vars) => {
-      void queryClient.invalidateQueries({ queryKey: ['admin', 'teams', vars.teamId, 'members'] })
+      void queryClient.invalidateQueries({
+        queryKey: ['admin', 'teams', vars.teamId, 'members'],
+        refetchType: 'none',
+      })
       void queryClient.invalidateQueries({ queryKey: ['teams', vars.teamId, 'members'] })
-      void queryClient.invalidateQueries({ queryKey: ['teams'] })
       void queryClient.invalidateQueries({ queryKey: ['admin-users'] })
     },
   })
@@ -664,3 +722,104 @@ export function useResetPassword(): UseMutationResult<
       }),
   })
 }
+
+// --- Ops: admin audit log (§10, admin only) ---
+
+export function buildAdminAuditQueryString(query: ListAdminAuditQuery = {}): string {
+  const params = new URLSearchParams()
+  if (query.action) params.set('action', query.action)
+  if (query.q) params.set('q', query.q)
+  if (query.cursor) params.set('cursor', query.cursor)
+  if (query.limit !== undefined) params.set('limit', String(query.limit))
+  const qs = params.toString()
+  return qs ? `/admin/audit-log?${qs}` : '/admin/audit-log'
+}
+
+export function useAdminAuditLog(
+  query: ListAdminAuditQuery = {},
+  options?: { enabled?: boolean },
+): UseQueryResult<ListAdminAuditResponse, Error> {
+  const path = buildAdminAuditQueryString(query)
+  return useQuery<ListAdminAuditResponse, Error>({
+    queryKey: ['admin-audit-log', query],
+    queryFn: () => apiFetch<ListAdminAuditResponse>(path),
+    enabled: options?.enabled ?? true,
+  })
+}
+
+// --- Collaboration Notifications ---
+
+export function useInfiniteNotifications(
+  userId: number | undefined,
+): UseInfiniteQueryResult<InfiniteData<ListNotificationsResponse, string | undefined>, Error> {
+  const isAuthed = typeof userId === 'number' && userId > 0
+
+  return useInfiniteQuery({
+    queryKey: ['notifications', userId, 'list'],
+    queryFn: ({ pageParam, signal }) => {
+      const params = new URLSearchParams()
+      if (pageParam) params.set('cursor', pageParam)
+      params.set('limit', '20')
+      return apiFetch<ListNotificationsResponse>(`/notifications?${params.toString()}`, { signal })
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    enabled: isAuthed,
+  })
+}
+
+export function useNotificationsSummary(
+  userId: number | undefined,
+): UseQueryResult<NotificationsSummary, Error> {
+  const isAuthed = typeof userId === 'number' && userId > 0
+
+  return useQuery<NotificationsSummary, Error>({
+    queryKey: ['notifications', userId, 'summary'],
+    queryFn: ({ signal }) => apiFetch<NotificationsSummary>('/notifications/summary', { signal }),
+    enabled: isAuthed,
+  })
+}
+
+export function useMarkNotificationRead(
+  userId: number | undefined,
+): UseMutationResult<void, Error, number> {
+  const queryClient = useQueryClient()
+  return useMutation<void, Error, number>({
+    mutationFn: async (id: number) => {
+      return apiFetch<void>(`/notifications/${id}/read`, {
+        method: 'POST',
+      })
+    },
+    onSuccess: () => {
+      if (typeof userId === 'number' && userId > 0) {
+        void queryClient.invalidateQueries({ queryKey: ['notifications', userId] })
+      }
+    },
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 404) {
+        if (typeof userId === 'number' && userId > 0) {
+          void queryClient.invalidateQueries({ queryKey: ['notifications', userId] })
+        }
+      }
+    },
+  })
+}
+
+export function useMarkAllNotificationsRead(
+  userId: number | undefined,
+): UseMutationResult<void, Error, void> {
+  const queryClient = useQueryClient()
+  return useMutation<void, Error, void>({
+    mutationFn: async () => {
+      return apiFetch<void>('/notifications/read-all', {
+        method: 'POST',
+      })
+    },
+    onSuccess: () => {
+      if (typeof userId === 'number' && userId > 0) {
+        void queryClient.invalidateQueries({ queryKey: ['notifications', userId] })
+      }
+    },
+  })
+}
+

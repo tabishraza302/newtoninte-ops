@@ -116,7 +116,7 @@ async function requestRefresh(epoch: number): Promise<string | null> {
   return p
 }
 
-export async function apiFetch<T>(path: string, init?: ApiFetchOptions): Promise<T> {
+export async function apiFetchResponse(path: string, init?: ApiFetchOptions): Promise<Response> {
   const requestEpoch = sessionEpoch
   const requestToken = accessToken
   const headers = new Headers(init?.headers)
@@ -205,12 +205,11 @@ export async function apiFetch<T>(path: string, init?: ApiFetchOptions): Promise
       )
     }
 
-    const retryParsed = await parseResponseBody<T>(retryRes)
     if (sessionEpoch !== requestEpoch) {
       throw new ApiError(401, 'Unauthorized', undefined)
     }
 
-    return retryParsed
+    return retryRes
   }
 
   if (!res.ok) {
@@ -218,10 +217,19 @@ export async function apiFetch<T>(path: string, init?: ApiFetchOptions): Promise
     throw new ApiError(res.status, `Request failed with status ${res.status}`, errorBody)
   }
 
-  const parsed = await parseResponseBody<T>(res)
   if (sessionEpoch !== requestEpoch) {
     throw new ApiError(401, 'Unauthorized', undefined)
   }
 
+  return res
+}
+
+export async function apiFetch<T>(path: string, init?: ApiFetchOptions): Promise<T> {
+  const requestEpoch = sessionEpoch
+  const res = await apiFetchResponse(path, init)
+  const parsed = await parseResponseBody<T>(res)
+  if (sessionEpoch !== requestEpoch) {
+    throw new ApiError(401, 'Unauthorized', undefined)
+  }
   return parsed
 }

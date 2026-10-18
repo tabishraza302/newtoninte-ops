@@ -15,6 +15,9 @@ import { Team } from './pages/Team'
 import { OutboxJobs } from './pages/OutboxJobs'
 import { AdminUsers } from './pages/AdminUsers'
 import { AdminTeams } from './pages/AdminTeams'
+import { AdminAuditLog } from './pages/AdminAuditLog'
+import { Notifications } from './pages/Notifications'
+import { NotificationLiveProvider } from './components/NotificationLiveProvider'
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -130,6 +133,16 @@ export function AppRoutes(): React.ReactElement {
         }
       />
       <Route
+        path="/notifications"
+        element={
+          <RequireAuth>
+            <AppLayout>
+              <Notifications />
+            </AppLayout>
+          </RequireAuth>
+        }
+      />
+      <Route
         path="/admin/jobs"
         element={
           <RequireAuth>
@@ -160,6 +173,16 @@ export function AppRoutes(): React.ReactElement {
         }
       />
       <Route
+        path="/admin/audit-log"
+        element={
+          <RequireAuth>
+            <AppLayout>
+              <AdminAuditLog />
+            </AppLayout>
+          </RequireAuth>
+        }
+      />
+      <Route
         path="/"
         element={
           <RequireAuth>
@@ -177,7 +200,9 @@ export function App(): React.ReactElement {
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
         <BrowserRouter>
-          <AppRoutes />
+          <NotificationLiveProvider>
+            <AppRoutes />
+          </NotificationLiveProvider>
         </BrowserRouter>
       </AuthProvider>
     </QueryClientProvider>

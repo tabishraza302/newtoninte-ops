@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { eq } from 'drizzle-orm'
 import { closeDb, db } from '../../src/db/client'
-import { activityEvents, outboxJobs, workItems } from '../../src/db/schema'
+import { activityEvents, notifications, outboxJobs, workItems } from '../../src/db/schema'
 import { ApiError } from '../../src/http/errors'
 import { assignItem } from '../../src/services/items'
 import { resetDb, seedItem, seedMembership, seedTeam, seedUser } from '../helpers/db'
@@ -55,6 +55,10 @@ describe('items service - assignItem (Task 4.6)', () => {
       teamName: 'Flight Ops',
       itemId: item.id,
     })
+
+    const notifs = await db.select().from(notifications).where(eq(notifications.recipientUserId, member.id))
+    expect(notifs).toHaveLength(1)
+    expect(notifs[0]?.type).toBe('assigned')
   })
 
   it('assigning B then C enqueues separate correct email payloads; duplicate/noop does not enqueue false event or job', async () => {

@@ -8,6 +8,7 @@ import { buildPage, decodeIdCursor, DEFAULT_LIMIT, MAX_LIMIT } from '../http/cur
 import { can } from '../policy'
 import { config } from '../config'
 import { hashPassword } from './crypto'
+import { recordAdminAudit } from './adminAudit'
 
 /**
  * The explicit column list for a user as the API returns it: every `users`
@@ -192,9 +193,10 @@ export async function createUser(
       }
 
       // 2. If teamId is specified, verify team exists
+      let teamName = ''
       if (hasTeamId) {
         const [team] = await tx
-          .select({ id: teams.id })
+          .select({ id: teams.id, name: teams.name })
           .from(teams)
           .where(eq(teams.id, input.teamId!))
           .limit(1)
@@ -202,8 +204,8 @@ export async function createUser(
         if (!team) {
           throw ApiError.of('NOT_FOUND', 'Team not found')
         }
+        teamName = team.name
       }
-
       // 3. Insert user
       const [inserted] = await tx.insert(users).values({
         email: normalizedEmail,
@@ -217,7 +219,7 @@ export async function createUser(
 
       // 4. Atomically insert membership and joined event if paired teamId/role provided
       if (hasTeamId && input.role) {
-        await tx.insert(memberships).values({
+        const [memResult] = await tx.insert(memberships).values({
           teamId: input.teamId!,
           userId: newUserId,
           role: input.role,
@@ -231,8 +233,34 @@ export async function createUser(
           fromRole: null,
           toRole: input.role,
         })
+
+        await recordAdminAudit(tx, {
+          actorId: actor.id,
+          action: 'membership_added',
+          targetType: 'membership',
+          targetId: Number(memResult.insertId),
+          metadata: {
+            teamId: input.teamId!,
+            teamName,
+            userId: newUserId,
+            email: normalizedEmail,
+            displayName: trimmedDisplayName,
+            fromRole: null,
+            toRole: input.role,
+          },
+        })
       }
 
+      await recordAdminAudit(tx, {
+        actorId: actor.id,
+        action: 'user_created',
+        targetType: 'user',
+        targetId: newUserId,
+        metadata: {
+          email: normalizedEmail,
+          displayName: trimmedDisplayName,
+        },
+      })
       // 5. Read back public user projection
       const [newUser] = await tx
         .select(publicUserColumns)
@@ -267,16 +295,20 @@ export async function setUserStatus(
 
   await withTransaction(async (tx) => {
     const [user] = await tx
-      .select({ id: users.id })
+      .select({
+        id: users.id,
+        email: users.email,
+        displayName: users.displayName,
+        status: users.status,
+      })
       .from(users)
       .where(eq(users.id, id))
       .limit(1)
+      .for('update')
 
     if (!user) {
       throw ApiError.of('NOT_FOUND')
     }
-
-    await tx.update(users).set({ status }).where(eq(users.id, id))
 
     if (status === 'disabled') {
       await tx
@@ -284,5 +316,24 @@ export async function setUserStatus(
         .set({ revokedAt: new Date() })
         .where(and(eq(refreshTokens.userId, id), isNull(refreshTokens.revokedAt)))
     }
+
+    if (user.status === status) {
+      return
+    }
+
+    await tx.update(users).set({ status }).where(eq(users.id, id))
+
+    await recordAdminAudit(tx, {
+      actorId: actor.id,
+      action: 'user_status_changed',
+      targetType: 'user',
+      targetId: id,
+      metadata: {
+        email: user.email,
+        displayName: user.displayName,
+        fromStatus: user.status,
+        toStatus: status,
+      },
+    })
   })
 }

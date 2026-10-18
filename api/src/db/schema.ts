@@ -12,7 +12,7 @@ import {
   unique,
   varchar,
 } from 'drizzle-orm/mysql-core'
-import { ITEM_TYPES, OUTBOX_TYPES, PRIORITIES, ROLES, STATUSES } from '../domain/types'
+import { ADMIN_AUDIT_ACTIONS, ITEM_TYPES, NOTIFICATION_TYPES, OUTBOX_TYPES, PRIORITIES, ROLES, STATUSES } from '../domain/types'
 
 // Identity & access tables (spec §5.1).
 //
@@ -96,6 +96,29 @@ export const membershipEvents = mysqlTable(
       .default(sql`CURRENT_TIMESTAMP(3)`),
   },
   (t) => [index('membership_events_team_id_ix').on(t.teamId, t.id)],
+)
+
+// Cross-platform administrative history. Append-only; the primary key indexes id.
+export const adminAuditEvents = mysqlTable(
+  'admin_audit_events',
+  {
+    id: bigint('id', { mode: 'number', unsigned: true }).autoincrement().primaryKey(),
+    actorId: bigint('actor_id', { mode: 'number', unsigned: true })
+      .notNull()
+      .references(() => users.id),
+    action: mysqlEnum('action', ADMIN_AUDIT_ACTIONS).notNull(),
+    targetType: mysqlEnum('target_type', ['user', 'team', 'membership', 'job']).notNull(),
+    targetId: bigint('target_id', { mode: 'number', unsigned: true }).notNull(),
+    metadata: json('metadata').$type<Record<string, unknown>>().notNull(),
+    createdAt: datetime('created_at', { fsp: 3 })
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP(3)`),
+  },
+  (t) => [
+    index('admin_audit_action_id_ix').on(t.action, t.id),
+    index('admin_audit_actor_id_ix').on(t.actorId, t.id),
+    index('admin_audit_target_id_ix').on(t.targetType, t.targetId, t.id),
+  ],
 )
 
 // Single-use invitations — no `updated_at`.
@@ -239,6 +262,30 @@ export const comments = mysqlTable(
   (t) => [index('comments_item_ix').on(t.workItemId, t.id)],
 )
 
+// Persistent notifications for collaboration inbox.
+export const notifications = mysqlTable(
+  'notifications',
+  {
+    id: bigint('id', { mode: 'number', unsigned: true }).autoincrement().primaryKey(),
+    recipientUserId: bigint('recipient_user_id', { mode: 'number', unsigned: true })
+      .notNull()
+      .references(() => users.id),
+    activityEventId: bigint('activity_event_id', { mode: 'number', unsigned: true })
+      .notNull()
+      .references(() => activityEvents.id),
+    type: mysqlEnum('type', NOTIFICATION_TYPES).notNull(),
+    readAt: datetime('read_at', { fsp: 3 }),
+    createdAt: datetime('created_at', { fsp: 3 })
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP(3)`),
+  },
+  (t) => [
+    unique('notifications_recipient_event_uq').on(t.recipientUserId, t.activityEventId),
+    index('notifications_recipient_id_ix').on(t.recipientUserId, t.id),
+    index('notifications_recipient_read_id_ix').on(t.recipientUserId, t.readAt, t.id),
+  ],
+)
+
 // Infrastructure tables (spec §5.3).
 
 // The outbox queue — mutable lease/attempt state, so `updated_at` is present.
@@ -303,6 +350,9 @@ export type NewMembership = typeof memberships.$inferInsert
 export type MembershipEventRow = typeof membershipEvents.$inferSelect
 export type NewMembershipEvent = typeof membershipEvents.$inferInsert
 
+export type AdminAuditEventRow = typeof adminAuditEvents.$inferSelect
+export type NewAdminAuditEvent = typeof adminAuditEvents.$inferInsert
+
 export type InvitationRow = typeof invitations.$inferSelect
 export type NewInvitation = typeof invitations.$inferInsert
 
@@ -320,6 +370,9 @@ export type NewActivityEvent = typeof activityEvents.$inferInsert
 
 export type CommentRow = typeof comments.$inferSelect
 export type NewComment = typeof comments.$inferInsert
+
+export type NotificationRow = typeof notifications.$inferSelect
+export type NewNotification = typeof notifications.$inferInsert
 
 export type OutboxJobRow = typeof outboxJobs.$inferSelect
 export type NewOutboxJob = typeof outboxJobs.$inferInsert

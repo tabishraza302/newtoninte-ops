@@ -129,6 +129,14 @@ describe('App', () => {
           }),
         )
       }
+      if (urlStr.includes('/notifications/summary')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ unreadCount: 0 }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
       if (urlStr.includes('/items')) {
         return Promise.resolve(
           new Response(JSON.stringify({ items: [], nextCursor: null }), {
@@ -178,6 +186,14 @@ describe('App', () => {
       if (urlStr.includes('/teams')) {
         return Promise.resolve(
           new Response(JSON.stringify({ teams: [] }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      if (urlStr.includes('/notifications/summary')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ unreadCount: 0 }), {
             status: 200,
             headers: { 'Content-Type': 'application/json' },
           }),
@@ -237,6 +253,14 @@ describe('App', () => {
           }),
         )
       }
+      if (urlStr.includes('/notifications/summary')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ unreadCount: 0 }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
       if (urlStr.includes('/items/123')) {
         return Promise.resolve(new Response(JSON.stringify({ error: 'not found' }), { status: 404 }))
       }
@@ -257,5 +281,141 @@ describe('App', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /Item not found/i })).toBeInTheDocument()
     })
+  })
+
+  it('redirects direct navigation to /notifications when anon to /login', async () => {
+    const queryClient = createTestQueryClient()
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>
+          <MemoryRouter initialEntries={['/notifications']}>
+            <AppRoutes />
+          </MemoryRouter>
+        </AuthProvider>
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /Log In/i })).toBeInTheDocument()
+    })
+  })
+
+  it('routes to /notifications when authenticated', async () => {
+    globalThis.fetch = vi.fn().mockImplementation((url: string | URL | Request) => {
+      const urlStr = typeof url === 'string' ? url : url.toString()
+      if (urlStr.includes('/auth/refresh')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ accessToken: 'fake-token', user: mockAuthedUser }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      if (urlStr.includes('/auth/me')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ user: mockAuthedUser, memberships: [] }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      if (urlStr.includes('/notifications/summary')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ unreadCount: 0 }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      if (urlStr.includes('/notifications')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ notifications: [], nextCursor: null }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }))
+    })
+
+    const queryClient = createTestQueryClient()
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>
+          <MemoryRouter initialEntries={['/notifications']}>
+            <AppRoutes />
+          </MemoryRouter>
+        </AuthProvider>
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /Notifications/i })).toBeInTheDocument()
+    })
+  })
+
+  it('verifies count errors are not displayed as zero', async () => {
+    globalThis.fetch = vi.fn().mockImplementation((url: string | URL | Request) => {
+      const urlStr = typeof url === 'string' ? url : url.toString()
+      if (urlStr.includes('/auth/refresh')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ accessToken: 'fake-token', user: mockAuthedUser }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      if (urlStr.includes('/auth/me')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ user: mockAuthedUser, memberships: [] }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      if (urlStr.includes('/notifications/summary')) {
+        return Promise.resolve(new Response(JSON.stringify({ error: 'Internal Error' }), { status: 500 }))
+      }
+      if (urlStr.includes('/teams')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ teams: [] }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      if (urlStr.includes('/items')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ items: [], nextCursor: null }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }))
+    })
+
+    const queryClient = createTestQueryClient()
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>
+          <MemoryRouter initialEntries={['/dashboard']}>
+            <AppRoutes />
+          </MemoryRouter>
+        </AuthProvider>
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /Dashboard/i })).toBeInTheDocument()
+    })
+
+    // Count error should NOT be displayed as "0" or "0 unread"
+    const navLink = await screen.findByRole('link', {
+      name: /Notifications \(unread count unavailable\)/i,
+    })
+    expect(navLink).toBeInTheDocument()
+    expect(navLink.textContent).not.toContain('0')
+    expect(navLink.getAttribute('href')).toBe('/notifications')
   })
 })

@@ -1,6 +1,7 @@
 import React from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { useOptionalAuth } from '../auth/AuthContext'
+import { useNotificationsSummary } from '../api/hooks'
 import { theme } from '../theme'
 export interface AppLayoutProps {
   children: React.ReactNode
@@ -11,6 +12,8 @@ export function AppLayout({ children }: AppLayoutProps): React.ReactElement {
   const location = useLocation()
   const user = auth?.user
   const isAdmin = !!user?.isAdmin
+  const authedUserId = auth?.status === 'authed' ? auth.user?.id : undefined
+  const { data: summary, isError: isSummaryError } = useNotificationsSummary(authedUserId)
   const [isMobileMenuOpen, setIsMobileMenuOpen] = React.useState(false)
   const [isMobile, setIsMobile] = React.useState(() => {
     if (typeof window === 'undefined') return false
@@ -116,16 +119,21 @@ export function AppLayout({ children }: AppLayoutProps): React.ReactElement {
     }
     if (path === '/admin/users') return location.pathname === '/admin/users'
     if (path === '/admin/teams') return location.pathname === '/admin/teams'
+    if (path === '/admin/audit-log') return location.pathname === '/admin/audit-log'
     if (path === '/dashboard') {
       return location.pathname === '/dashboard' || (!isAdmin && location.pathname === '/')
     }
     if (path === '/items') return location.pathname === '/items'
     if (path === '/items/new') return location.pathname === '/items/new'
     if (path === '/teams') return location.pathname === '/teams' || location.pathname.startsWith('/teams/')
+    if (path === '/notifications') return location.pathname === '/notifications'
     return false
   }
 
   const getBreadcrumb = (): string => {
+    if (location.pathname === '/notifications' || location.pathname.startsWith('/notifications/')) {
+      return 'Notifications'
+    }
     if (location.pathname === '/admin/jobs' || (isAdmin && location.pathname === '/')) {
       return 'System Administration / Outbox Jobs'
     }
@@ -134,6 +142,9 @@ export function AppLayout({ children }: AppLayoutProps): React.ReactElement {
     }
     if (location.pathname === '/admin/teams') {
       return 'System Administration / Teams'
+    }
+    if (location.pathname === '/admin/audit-log') {
+      return 'System Administration / Audit Log'
     }
     if (location.pathname === '/' || location.pathname === '/dashboard') {
       return 'Triage / Dashboard'
@@ -145,6 +156,7 @@ export function AppLayout({ children }: AppLayoutProps): React.ReactElement {
     if (location.pathname.startsWith('/admin/jobs')) return 'System Administration / Outbox Jobs'
     if (location.pathname.startsWith('/admin/users')) return 'System Administration / Users'
     if (location.pathname.startsWith('/admin/teams')) return 'System Administration / Teams'
+    if (location.pathname.startsWith('/admin/audit-log')) return 'System Administration / Audit Log'
     if (location.pathname.startsWith('/admin')) return 'System Administration'
     return 'Platform'
   }
@@ -370,6 +382,24 @@ export function AppLayout({ children }: AppLayoutProps): React.ReactElement {
                   >
                     <span>Teams</span>
                   </Link>
+                  <Link
+                    to="/admin/audit-log"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.75rem',
+                      padding: '0.55rem 0.75rem',
+                      borderRadius: '6px',
+                      fontSize: '0.875rem',
+                      fontWeight: isCurrent('/admin/audit-log') ? 600 : 500,
+                      color: isCurrent('/admin/audit-log') ? '#ffffff' : '#94a3b8',
+                      backgroundColor: isCurrent('/admin/audit-log') ? theme.colors.accent : 'transparent',
+                      textDecoration: 'none',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <span>Audit Log</span>
+                  </Link>
                 </nav>
               </div>
           ) : (
@@ -554,7 +584,119 @@ export function AppLayout({ children }: AppLayoutProps): React.ReactElement {
               <span style={{ color: '#0f172a' }}>{getBreadcrumb()}</span>
             </div>
           </div>
-
+          {auth?.status === 'authed' && (
+            <Link
+              to="/notifications"
+              title="Notifications"
+              aria-label={
+                isSummaryError
+                  ? 'Notifications (unread count unavailable)'
+                  : summary && summary.unreadCount > 0
+                    ? `Notifications (${summary.unreadCount} unread)`
+                    : 'Notifications'
+              }
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                position: 'relative',
+                width: '44px',
+                height: '44px',
+                minWidth: '44px',
+                minHeight: '44px',
+                boxSizing: 'border-box',
+                borderRadius: '6px',
+                fontSize: '0.875rem',
+                fontWeight: isCurrent('/notifications') ? 600 : 500,
+                color: isCurrent('/notifications') ? '#0f172a' : '#475569',
+                backgroundColor: isCurrent('/notifications') ? '#f1f5f9' : 'transparent',
+                textDecoration: 'none',
+                border: '1px solid',
+                borderColor: isCurrent('/notifications') ? '#cbd5e1' : '#e2e8f0',
+                transition: 'all 0.15s ease',
+                flexShrink: 0,
+              }}
+            >
+              <span
+                style={{
+                  position: 'absolute',
+                  width: '1px',
+                  height: '1px',
+                  padding: 0,
+                  margin: '-1px',
+                  overflow: 'hidden',
+                  clip: 'rect(0, 0, 0, 0)',
+                  whiteSpace: 'nowrap',
+                  border: 0,
+                }}
+              >
+                Notifications
+              </span>
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+                <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+              </svg>
+              {summary && summary.unreadCount > 0 && (
+                <span
+                  aria-hidden="true"
+                  style={{
+                    position: 'absolute',
+                    top: '2px',
+                    right: '2px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    minWidth: '1.125rem',
+                    height: '1.125rem',
+                    padding: '0 0.25rem',
+                    borderRadius: '9999px',
+                    fontSize: '0.625rem',
+                    fontWeight: 700,
+                    lineHeight: 1,
+                    backgroundColor: theme.colors.accent,
+                    color: '#ffffff',
+                  }}
+                >
+                  {summary.unreadCount > 99 ? '99+' : summary.unreadCount}
+                </span>
+              )}
+              {isSummaryError && (
+                <span
+                  aria-hidden="true"
+                  title="Unread count unavailable"
+                  style={{
+                    position: 'absolute',
+                    top: '2px',
+                    right: '2px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    width: '1.125rem',
+                    height: '1.125rem',
+                    borderRadius: '9999px',
+                    fontSize: '0.625rem',
+                    fontWeight: 700,
+                    lineHeight: 1,
+                    backgroundColor: '#fef2f2',
+                    color: theme.colors.priority.urgent.text,
+                    border: `1px solid ${theme.colors.priority.urgent.border}`,
+                  }}
+                >
+                  !
+                </span>
+              )}
+            </Link>
+          )}
         </header>
 
         {/* Page Content */}

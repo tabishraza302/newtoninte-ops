@@ -3,7 +3,7 @@ import request from 'supertest'
 import { eq, isNull } from 'drizzle-orm'
 import { createApp } from '../../src/app'
 import { closeDb, db } from '../../src/db/client'
-import { membershipEvents, memberships, refreshTokens, users } from '../../src/db/schema'
+import { adminAuditEvents, membershipEvents, memberships, refreshTokens, users } from '../../src/db/schema'
 import { signAccessToken } from '../../src/services/tokens'
 import { setUserStatus } from '../../src/services/users'
 import { resetDb, seedMembership, seedTeam, seedUser } from '../helpers/db'
@@ -270,6 +270,152 @@ describe('Admin team roster and session revocation routes', () => {
       const res = await request(app)
         .delete(`/admin/teams/${team.id}/members/${member.id}`)
         .set('Authorization', authHeader)
+
+      expect(res.status).toBe(403)
+      expect(res.body.error.code).toBe('FORBIDDEN')
+    })
+  })
+
+  describe('4. Admin Team Discovery (GET /admin/teams)', () => {
+    it('rejects unauthenticated and non-admin callers', async () => {
+      const unauth = await request(app).get('/admin/teams')
+      expect(unauth.status).toBe(401)
+      expect(unauth.body.error.code).toBe('UNAUTHENTICATED')
+
+      const { authHeader } = await memberAuth()
+      const forbidden = await request(app).get('/admin/teams').set('Authorization', authHeader)
+      expect(forbidden.status).toBe(403)
+      expect(forbidden.body.error.code).toBe('FORBIDDEN')
+    })
+
+    it('paginates teams ascending by id and respects limit', async () => {
+      const { authHeader } = await adminAuth()
+      const t1 = await seedTeam({ name: 'Alpha', slug: 'alpha' })
+      const t2 = await seedTeam({ name: 'Beta', slug: 'beta' })
+      const t3 = await seedTeam({ name: 'Gamma', slug: 'gamma' })
+
+      const page1 = await request(app)
+        .get('/admin/teams?limit=2')
+        .set('Authorization', authHeader)
+      expect(page1.status).toBe(200)
+      expect(page1.body.teams.map((t: { id: number }) => t.id)).toEqual([t1.id, t2.id])
+      expect(page1.body.nextCursor).toBeTruthy()
+
+      const page2 = await request(app)
+        .get(`/admin/teams?limit=2&cursor=${encodeURIComponent(page1.body.nextCursor)}`)
+        .set('Authorization', authHeader)
+      expect(page2.status).toBe(200)
+      expect(page2.body.teams.map((t: { id: number }) => t.id)).toEqual([t3.id])
+      expect(page2.body.nextCursor).toBeNull()
+    })
+
+    it('filters teams by literal search query and rejects mismatched cursor scope', async () => {
+      const { authHeader } = await adminAuth()
+      const literal = 'Special %_\\ Team'
+      await seedTeam({ name: literal, slug: 'special' })
+      await seedTeam({ name: 'Other Team', slug: 'other' })
+
+      const searchLiteral = await request(app)
+        .get('/admin/teams?q=%25_%5C')
+        .set('Authorization', authHeader)
+      expect(searchLiteral.status).toBe(200)
+      expect(searchLiteral.body.teams).toHaveLength(1)
+      expect(searchLiteral.body.teams[0].name).toBe(literal)
+
+      const searchAll = await request(app)
+        .get('/admin/teams?limit=1')
+        .set('Authorization', authHeader)
+      const mismatched = await request(app)
+        .get(`/admin/teams?q=other&cursor=${encodeURIComponent(searchAll.body.nextCursor)}`)
+        .set('Authorization', authHeader)
+      expect(mismatched.status).toBe(422)
+      expect(mismatched.body.error.code).toBe('VALIDATION_ERROR')
+    })
+  })
+
+  describe('5. Admin Team Member Role Update (PATCH /admin/teams/:id/members/:userId)', () => {
+    it('admin can change member role and writes admin audit event', async () => {
+      const { authHeader, user: admin } = await adminAuth()
+      const team = await seedTeam({ name: 'Role Team' })
+      const targetUser = await seedUser({ displayName: 'Target Member', email: 'target@role.test' })
+      await seedMembership(targetUser.id, team.id, 'viewer')
+
+      const res = await request(app)
+        .patch(`/admin/teams/${team.id}/members/${targetUser.id}`)
+        .set('Authorization', authHeader)
+        .send({ role: 'member' })
+
+      expect(res.status).toBe(200)
+      expect(res.body).toEqual({ status: 'ok' })
+
+      const [membership] = await db
+        .select()
+        .from(memberships)
+        .where(eq(memberships.userId, targetUser.id))
+      expect(membership?.role).toBe('member')
+
+      const auditRows = await db.select().from(adminAuditEvents)
+      expect(auditRows).toHaveLength(1)
+      expect(auditRows[0]).toMatchObject({
+        action: 'membership_role_changed',
+        targetType: 'membership',
+        targetId: membership?.id,
+        metadata: {
+          teamId: team.id,
+          teamName: 'Role Team',
+          userId: targetUser.id,
+          email: targetUser.email,
+          displayName: targetUser.displayName,
+          fromRole: 'viewer',
+          toRole: 'member',
+        },
+      })
+    })
+
+    it('same-role update is a no-op and creates no audit event', async () => {
+      const { authHeader } = await adminAuth()
+      const team = await seedTeam()
+      const targetUser = await seedUser()
+      await seedMembership(targetUser.id, team.id, 'viewer')
+
+      const res = await request(app)
+        .patch(`/admin/teams/${team.id}/members/${targetUser.id}`)
+        .set('Authorization', authHeader)
+        .send({ role: 'viewer' })
+
+      expect(res.status).toBe(200)
+      expect(res.body).toEqual({ status: 'ok' })
+      expect(await db.select().from(adminAuditEvents)).toHaveLength(0)
+    })
+
+    it('rejects demoting the last lead with LAST_LEAD (422) and writes no audit event', async () => {
+      const { authHeader } = await adminAuth()
+      const team = await seedTeam()
+      const leadUser = await seedUser()
+      await seedMembership(leadUser.id, team.id, 'lead')
+
+      const res = await request(app)
+        .patch(`/admin/teams/${team.id}/members/${leadUser.id}`)
+        .set('Authorization', authHeader)
+        .send({ role: 'member' })
+
+      expect(res.status).toBe(422)
+      expect(res.body.error.code).toBe('LAST_LEAD')
+      expect(await db.select().from(adminAuditEvents)).toHaveLength(0)
+    })
+
+    it('non-admin (including team lead) gets 403 FORBIDDEN on admin role route', async () => {
+      const team = await seedTeam()
+      const leadUser = await seedUser({ isAdmin: false })
+      const memberUser = await seedUser({ isAdmin: false })
+      await seedMembership(leadUser.id, team.id, 'lead')
+      await seedMembership(memberUser.id, team.id, 'viewer')
+
+      const token = await signAccessToken(leadUser.id)
+      const res = await request(app)
+        .patch(`/admin/teams/${team.id}/members/${memberUser.id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ role: 'member' })
 
       expect(res.status).toBe(403)
       expect(res.body.error.code).toBe('FORBIDDEN')

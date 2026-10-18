@@ -2,12 +2,13 @@ import { pool } from '../../src/db/client'
 
 export * from './factory'
 
-// The 12 application tables created by the schema (see src/db/schema.ts).
+// Application tables created by the schema (see src/db/schema.ts).
 // Order is irrelevant because FOREIGN_KEY_CHECKS is disabled below.
 // Drizzle's `__drizzle_migrations` journal is deliberately excluded: migrations
 // are applied once by `globalSetup`, so the journal must survive `resetDb`.
 // `TRUNCATE` resets `AUTO_INCREMENT`, so no separate counter reset is needed.
 const TABLES = [
+  'admin_audit_events',
   'users',
   'teams',
   'memberships',
@@ -18,6 +19,7 @@ const TABLES = [
   'work_items',
   'activity_events',
   'comments',
+  'notifications',
   'outbox_jobs',
   'idempotency_keys',
 ] as const

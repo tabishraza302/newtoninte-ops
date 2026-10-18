@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, inArray, sql } from 'drizzle-orm'
+import { and, asc, eq, gt, inArray, or, sql } from 'drizzle-orm'
 import { db } from '../db/client'
 import { membershipEvents, memberships, teams, users } from '../db/schema'
 import { withTransaction } from '../db/tx'
@@ -6,6 +6,7 @@ import { buildPage, decodeIdCursor, DEFAULT_LIMIT, MAX_LIMIT } from '../http/cur
 import { ApiError } from '../http/errors'
 import { authorize, can, scopeTeamIds } from '../policy'
 import type { Actor, Role } from '../domain/types'
+import { recordAdminAudit } from './adminAudit'
 
 export type TeamRow = typeof teams.$inferSelect
 
@@ -17,6 +18,12 @@ function isDupEntry(err: unknown): boolean {
     return code === 'ER_DUP_ENTRY' || errno === 1062
   }
   return false
+}
+function escapeLike(str: string): string {
+  return str
+    .replace(/\\/g, '\\\\')
+    .replace(/%/g, '\\%')
+    .replace(/_/g, '\\_')
 }
 
 /**
@@ -41,28 +48,107 @@ export async function createTeam(
   }
 
   try {
-    const [result] = await db.insert(teams).values({
-      name,
-      slug,
+    return await withTransaction(async (tx) => {
+      const [result] = await tx.insert(teams).values({
+        name,
+        slug,
+      })
+
+      const [row] = await tx
+        .select()
+        .from(teams)
+        .where(eq(teams.id, Number(result.insertId)))
+        .limit(1)
+
+      if (!row) {
+        throw ApiError.of('INTERNAL_ERROR', 'Failed to retrieve created team')
+      }
+
+      await recordAdminAudit(tx, {
+        actorId: actor.id,
+        action: 'team_created',
+        targetType: 'team',
+        targetId: row.id,
+        metadata: {
+          name: row.name,
+          slug: row.slug,
+        },
+      })
+
+      return row
     })
-
-    const [row] = await db
-      .select()
-      .from(teams)
-      .where(eq(teams.id, result.insertId))
-      .limit(1)
-
-    if (!row) {
-      throw ApiError.of('INTERNAL_ERROR', 'Failed to retrieve created team')
-    }
-
-    return row
   } catch (err) {
     if (isDupEntry(err)) {
       throw ApiError.of('VALIDATION_ERROR', 'A team with this slug already exists')
     }
     throw err
   }
+}
+
+export interface ListAdminTeamsQuery {
+  q?: string
+  cursor?: string
+  limit?: number
+}
+
+export interface ListAdminTeamsResult {
+  teams: TeamRow[]
+  nextCursor: string | null
+}
+
+/**
+ * Administrator team discovery with literal search and keyset pagination (id ASC).
+ */
+export async function listAdminTeams(
+  actor: Actor,
+  query?: ListAdminTeamsQuery,
+): Promise<ListAdminTeamsResult> {
+  const allowed = await can(actor, 'team:listAll')
+  if (!allowed) {
+    throw ApiError.of('FORBIDDEN')
+  }
+
+  const effectiveLimit = query?.limit ?? DEFAULT_LIMIT
+  if (!Number.isInteger(effectiveLimit) || effectiveLimit < 1 || effectiveLimit > MAX_LIMIT) {
+    throw ApiError.of('VALIDATION_ERROR', `limit must be an integer between 1 and ${MAX_LIMIT}`)
+  }
+
+  const q = query?.q?.trim() ?? ''
+  const scope = `admin:teams:q=${q}`
+
+  const cursorId = decodeIdCursor(query?.cursor, scope)
+
+  const conditions = []
+  if (cursorId !== null) {
+    conditions.push(gt(teams.id, cursorId))
+  }
+
+  if (q !== '') {
+    const escaped = escapeLike(q)
+    const pattern = `%${escaped}%`
+    conditions.push(
+      or(
+        sql`${teams.name} LIKE ${pattern} ESCAPE '\\\\'`,
+        sql`${teams.slug} LIKE ${pattern} ESCAPE '\\\\'`,
+      )!,
+    )
+  }
+
+  const rows = await db
+    .select()
+    .from(teams)
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .orderBy(asc(teams.id))
+    .limit(effectiveLimit + 1)
+
+  const { page, nextCursor } = buildPage(
+    rows,
+    effectiveLimit,
+    (r) => ({ id: r.id }),
+    scope,
+  )
+
+  return { teams: page, nextCursor }
 }
 
 /**
@@ -223,7 +309,7 @@ export async function adminRemoveTeamMember(
 
   await withTransaction(async (tx) => {
     const [team] = await tx
-      .select({ id: teams.id })
+      .select({ id: teams.id, name: teams.name })
       .from(teams)
       .where(eq(teams.id, teamId))
       .for('update')
@@ -254,6 +340,12 @@ export async function adminRemoveTeamMember(
       }
     }
 
+    const [subjectUser] = await tx
+      .select({ email: users.email, displayName: users.displayName })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1)
+
     await tx.delete(memberships).where(eq(memberships.id, target.id))
 
     await tx.insert(membershipEvents).values({
@@ -263,6 +355,22 @@ export async function adminRemoveTeamMember(
       action: 'removed',
       fromRole: target.role,
       toRole: null,
+    })
+
+    await recordAdminAudit(tx, {
+      actorId: actor.id,
+      action: 'membership_removed',
+      targetType: 'membership',
+      targetId: target.id,
+      metadata: {
+        teamId,
+        teamName: team.name,
+        userId,
+        email: subjectUser?.email ?? '',
+        displayName: subjectUser?.displayName ?? '',
+        fromRole: target.role,
+        toRole: null,
+      },
     })
   })
 }

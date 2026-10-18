@@ -218,7 +218,7 @@ describe('memberships service', () => {
     }
   })
 
-  it('enforces lead requirement for admins on membership:manage (no admin bypass, R9 404/403)', async () => {
+  it('enforces lead requirement for admins on membership:manage (no admin bypass, R9 404/403) while admitting admins to setMemberRole', async () => {
     const team = await seedTeam()
     const adminUser = await seedUser({ email: 'admin-lead@example.test', isAdmin: true })
     const targetUser = await seedUser({ email: 'target-mem@example.test' })
@@ -228,11 +228,15 @@ describe('memberships service', () => {
 
     const adminActor: Actor = { id: adminUser.id, isAdmin: true }
 
-    // Admin with no membership on team -> 404 NOT_FOUND per R9
-    expect(await errorCode(() => setMemberRole(adminActor, team.id, targetUser.id, 'member'))).toBe('NOT_FOUND')
+    // Admin with no membership on team -> 404 NOT_FOUND on removeMember per R9
+    expect(await errorCode(() => removeMember(adminActor, team.id, targetUser.id))).toBe('NOT_FOUND')
 
-    // Admin as viewer on team -> 403 FORBIDDEN
+    // Admin as viewer on team -> 403 FORBIDDEN on removeMember
     await seedMembership(adminUser.id, team.id, 'viewer')
-    expect(await errorCode(() => setMemberRole(adminActor, team.id, targetUser.id, 'member'))).toBe('FORBIDDEN')
+    expect(await errorCode(() => removeMember(adminActor, team.id, targetUser.id))).toBe('FORBIDDEN')
+
+    // Admin is admitted to setMemberRole via membership:role:manage
+    await setMemberRole(adminActor, team.id, targetUser.id, 'member')
+    expect(await fetchMembershipRole(team.id, targetUser.id)).toBe('member')
   })
 })

@@ -44,6 +44,17 @@ export const ACTIVITY_TYPES = [
 ] as const
 export type ActivityType = (typeof ACTIVITY_TYPES)[number]
 
+export const ADMIN_AUDIT_ACTIONS = [
+  'user_created',
+  'user_status_changed',
+  'team_created',
+  'membership_added',
+  'membership_role_changed',
+  'membership_removed',
+  'job_retried',
+] as const
+export type AdminAuditAction = (typeof ADMIN_AUDIT_ACTIONS)[number]
+
 export interface UserSummary {
   id: number
   displayName: string
@@ -232,6 +243,47 @@ export interface AddTeamMemberInput {
   role: Role
 }
 
+export interface ListAdminTeamsQuery {
+  q?: string | undefined
+  cursor?: string | undefined
+  limit?: number | undefined
+}
+
+export interface ListAdminTeamsResponse {
+  teams: Team[]
+  nextCursor: string | null
+}
+
+export type AdminAuditTargetType = 'user' | 'team' | 'membership' | 'job'
+
+export interface AdminAuditActor {
+  id: number
+  email: string
+  displayName: string
+}
+
+export interface AdminAuditEvent {
+  id: number
+  actor: AdminAuditActor
+  action: AdminAuditAction
+  targetType: AdminAuditTargetType
+  targetId: number
+  metadata: Record<string, any>
+  createdAt: string
+}
+
+export interface ListAdminAuditQuery {
+  action?: AdminAuditAction | undefined
+  q?: string | undefined
+  cursor?: string | undefined
+  limit?: number | undefined
+}
+
+export interface ListAdminAuditResponse {
+  events: AdminAuditEvent[]
+  nextCursor: string | null
+}
+
 // --- Team Scoped Members & Invitations (§7.4, §10) ---
 
 export interface TeamMember {
@@ -327,4 +379,35 @@ export interface ForgotPasswordInput {
 export interface ResetPasswordInput {
   token: string
   password: string
+}
+
+// --- Collaboration Notifications ---
+
+export const NOTIFICATION_TYPES = [
+  'assigned',
+  'comment_added',
+  'approval_requested',
+  'workflow_decision',
+] as const
+export type NotificationType = (typeof NOTIFICATION_TYPES)[number]
+
+export interface CollaborationNotification {
+  id: number
+  type: NotificationType
+  workItemId: number
+  itemTitle: string
+  actor: { id: number; displayName: string } | null
+  fromStatus: Status | null
+  toStatus: Status | null
+  createdAt: string
+  readAt: string | null
+}
+
+export interface ListNotificationsResponse {
+  notifications: CollaborationNotification[]
+  nextCursor: string | null
+}
+
+export interface NotificationsSummary {
+  unreadCount: number
 }

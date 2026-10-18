@@ -396,6 +396,9 @@ describe('OutboxJobs Page (Task 5.4)', () => {
       if (url === '/admin/jobs' || url.startsWith('/admin/jobs?')) {
         return Promise.resolve(jsonResponse({ jobs: [failedJob], nextCursor: null }))
       }
+      if (url.includes('/notifications/summary')) {
+        return Promise.resolve(jsonResponse({ unreadCount: 0 }))
+      }
       return Promise.resolve(new Response(JSON.stringify({ error: 'not found' }), { status: 404 }))
     })
 
@@ -424,6 +427,9 @@ describe('OutboxJobs Page (Task 5.4)', () => {
           return Promise.resolve(
             jsonResponse({ user: { ...authValue().user, isAdmin }, memberships: [] }),
           )
+        }
+        if (url.includes('/notifications/summary')) {
+          return Promise.resolve(jsonResponse({ unreadCount: 0 }))
         }
         return Promise.resolve(new Response(JSON.stringify({ error: 'not found' }), { status: 404 }))
       })

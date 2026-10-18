@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { eq } from 'drizzle-orm'
 import { closeDb, db } from '../../src/db/client'
-import { activityEvents, comments } from '../../src/db/schema'
+import { activityEvents, comments, notifications } from '../../src/db/schema'
 import { ApiError } from '../../src/http/errors'
 import { addComment, listActivity } from '../../src/services/items'
 import { resetDb, seedItem, seedMembership, seedTeam, seedUser } from '../helpers/db'
@@ -170,5 +170,24 @@ describe('comments service - addComment (Task 4.8)', () => {
 
     expect(caughtError).toBeInstanceOf(ApiError)
     expect((caughtError as ApiError).code).toBe('NOT_FOUND')
+  })
+
+  it('member commenting on another member item enqueues comment_added notification for creator', async () => {
+    const creator = await seedUser()
+    const commenter = await seedUser()
+    const team = await seedTeam()
+    await seedMembership(creator.id, team.id, 'member')
+    await seedMembership(commenter.id, team.id, 'member')
+
+    const item = await seedItem(team.id, { createdBy: creator.id })
+    const actor: Actor = { id: commenter.id, isAdmin: false }
+    await addComment(actor, item.id, 'Investigating alongside you')
+
+    const notifs = await db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.recipientUserId, creator.id))
+    expect(notifs).toHaveLength(1)
+    expect(notifs[0]?.type).toBe('comment_added')
   })
 })

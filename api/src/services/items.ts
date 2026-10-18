@@ -10,6 +10,7 @@ import { authorize, can, membershipsOf, roleIn, scopeTeamIds } from '../policy'
 import { ITEM_TYPES, PRIORITIES } from '../domain/types'
 import type { Actor, ItemType, Priority, Status } from '../domain/types'
 import { recordActivity, recordFieldChanges } from './activity'
+import { createNotifications, teamLeadRecipientIds } from './notifications'
 import { enqueue } from './outbox'
 import { emailAssigned } from '../outbox/handlers'
 export { emailAssigned }
@@ -447,12 +448,20 @@ export async function createItem(actor: Actor, input: CreateItemInput, externalT
     })
 
     if (input.assigneeId !== undefined && input.assigneeId !== null) {
-      await recordActivity(tx, {
+      const activityId = await recordActivity(tx, {
         workItemId: id,
         actorId: actor.id,
         type: 'assignee_changed',
         fromValue: null,
         toValue: String(input.assigneeId),
+      })
+
+      await createNotifications(tx, {
+        activityEventId: activityId,
+        type: 'assigned',
+        actorId: actor.id,
+        teamId: input.teamId,
+        recipientUserIds: [input.assigneeId],
       })
 
       if (input.assigneeId !== actor.id) {
@@ -819,12 +828,20 @@ export async function assignItem(
       throw ApiError.of('STALE_STATE', 'Item version conflict or stale state')
     }
 
-    await recordActivity(tx, {
+    const activityId = await recordActivity(tx, {
       workItemId: id,
       actorId: actor.id,
       type: 'assignee_changed',
       fromValue: current.assigneeId !== null ? String(current.assigneeId) : null,
       toValue: String(assigneeId),
+    })
+
+    await createNotifications(tx, {
+      activityEventId: activityId,
+      type: 'assigned',
+      actorId: actor.id,
+      teamId: current.teamId,
+      recipientUserIds: [assigneeId],
     })
 
     if (assigneeId !== actor.id) {
@@ -1016,7 +1033,7 @@ export async function transitionItem(
     if (result.affectedRows === 0) {
       throw ApiError.of('STALE_STATE', 'Item status has changed')
     }
-    await recordActivity(tx, {
+    const statusActivityId = await recordActivity(tx, {
       workItemId: id,
       actorId: actor.id,
       type: 'status_changed',
@@ -1037,6 +1054,36 @@ export async function transitionItem(
         actorId: actor.id,
         type: 'comment_added',
         metadata: { body: trimmedReason },
+      })
+    }
+
+    const fromStatus = existing.status
+    if (fromStatus === 'open' && to === 'in_progress') {
+      // Explicitly classify start (open -> in_progress) as no notification
+    } else if (fromStatus === 'in_progress' && to === 'awaiting_approval') {
+      const leadIds = await teamLeadRecipientIds(tx, locked.teamId)
+      await createNotifications(tx, {
+        activityEventId: statusActivityId,
+        type: 'approval_requested',
+        actorId: actor.id,
+        teamId: locked.teamId,
+        recipientUserIds: leadIds,
+      })
+    } else if (
+      (fromStatus === 'awaiting_approval' && (to === 'resolved' || to === 'in_progress')) ||
+      (fromStatus === 'resolved' && (to === 'closed' || to === 'in_progress')) ||
+      ((fromStatus === 'open' || fromStatus === 'in_progress' || fromStatus === 'awaiting_approval') && to === 'cancelled')
+    ) {
+      const recipientUserIds: number[] = [locked.createdBy]
+      if (locked.assigneeId !== null) {
+        recipientUserIds.push(locked.assigneeId)
+      }
+      await createNotifications(tx, {
+        activityEventId: statusActivityId,
+        type: 'workflow_decision',
+        actorId: actor.id,
+        teamId: locked.teamId,
+        recipientUserIds,
       })
     }
   })
@@ -1068,11 +1115,21 @@ export async function addComment(actor: Actor, id: number, body: string): Promis
   }
 
   const comment = await withTransaction(async (tx) => {
+    const [locked] = await tx
+      .select()
+      .from(workItems)
+      .where(eq(workItems.id, id))
+      .for('update')
+
+    if (!locked) {
+      throw ApiError.of('NOT_FOUND')
+    }
+
     await authorize(actor, 'item:comment', {
       kind: 'item',
-      teamId: existing.teamId,
-      creatorId: existing.createdBy,
-      assigneeId: existing.assigneeId,
+      teamId: locked.teamId,
+      creatorId: locked.createdBy,
+      assigneeId: locked.assigneeId,
     }, tx)
     const [result] = await tx.insert(comments).values({
       workItemId: id,
@@ -1081,13 +1138,25 @@ export async function addComment(actor: Actor, id: number, body: string): Promis
     })
     const commentId = Number(result.insertId)
 
-    await recordActivity(tx, {
+    const activityId = await recordActivity(tx, {
       workItemId: id,
       actorId: actor.id,
       type: 'comment_added',
       metadata: { body: body },
     })
 
+    const recipientUserIds: number[] = [locked.createdBy]
+    if (locked.assigneeId !== null) {
+      recipientUserIds.push(locked.assigneeId)
+    }
+
+    await createNotifications(tx, {
+      activityEventId: activityId,
+      type: 'comment_added',
+      actorId: actor.id,
+      teamId: locked.teamId,
+      recipientUserIds,
+    })
     const [row] = await tx.select().from(comments).where(eq(comments.id, commentId)).limit(1)
     if (!row) {
       throw ApiError.of('INTERNAL_ERROR', 'Failed to read created comment')

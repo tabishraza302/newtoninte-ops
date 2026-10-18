@@ -3,7 +3,7 @@ import request from 'supertest'
 import { eq } from 'drizzle-orm'
 import { createApp } from '../../src/app'
 import { closeDb, db } from '../../src/db/client'
-import { membershipEvents, memberships, users } from '../../src/db/schema'
+import { adminAuditEvents, membershipEvents, memberships, users } from '../../src/db/schema'
 import { config } from '../../src/config'
 import { signAccessToken } from '../../src/services/tokens'
 import { createUser, type PublicUser } from '../../src/services/users'
@@ -456,6 +456,46 @@ describe('Admin user management routes (GET /admin/users, POST /admin/users)', (
         })
       expect(res.status).toBe(422)
       expect(res.body.error.code).toBe('VALIDATION_ERROR')
+    })
+  })
+
+  describe('8. Administrative audit log recording', () => {
+    it('records user_created and membership_added events on POST /admin/users', async () => {
+      const token = await adminAuth()
+      const team = await seedTeam({ name: 'Engineers' })
+      const res = await request(app)
+        .post('/admin/users')
+        .set('Authorization', token)
+        .send({
+          email: 'audited@example.com',
+          displayName: 'Audited User',
+          password: 'password123',
+          teamId: team.id,
+          role: 'member',
+        })
+      expect(res.status).toBe(201)
+
+      const events = await db.select().from(adminAuditEvents)
+      expect(events).toHaveLength(2)
+      const userEvent = events.find((e) => e.action === 'user_created')
+      const memEvent = events.find((e) => e.action === 'membership_added')
+      expect(userEvent).toMatchObject({
+        targetType: 'user',
+        targetId: res.body.user.id,
+        metadata: { email: 'audited@example.com', displayName: 'Audited User' },
+      })
+      expect(memEvent).toMatchObject({
+        targetType: 'membership',
+        metadata: {
+          teamId: team.id,
+          teamName: 'Engineers',
+          userId: res.body.user.id,
+          email: 'audited@example.com',
+          displayName: 'Audited User',
+          fromRole: null,
+          toRole: 'member',
+        },
+      })
     })
   })
 })

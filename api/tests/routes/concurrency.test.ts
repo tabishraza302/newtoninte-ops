@@ -3,7 +3,7 @@ import request from 'supertest'
 import { eq } from 'drizzle-orm'
 import { createApp } from '../../src/app'
 import { closeDb, db } from '../../src/db/client'
-import { workItems } from '../../src/db/schema'
+import { notifications, workItems } from '../../src/db/schema'
 import { resetDb, seedItem, seedMembership, seedTeam, seedUser } from '../helpers/db'
 import { signAccessToken } from '../../src/services/tokens'
 
@@ -306,6 +306,13 @@ describe('Concurrency & Workflow routes (§13)', () => {
     expect(persisted).toBeDefined()
     expect(persisted?.status).toBe('resolved')
     expect(persisted?.version).toBe(3)
+
+    const notifs = await db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.recipientUserId, worker.id))
+    expect(notifs).toHaveLength(1)
+    expect(notifs[0]?.type).toBe('workflow_decision')
   })
 
   it('(f) §13 Idempotency: same Idempotency-Key twice -> one item, byte-identical response', async () => {

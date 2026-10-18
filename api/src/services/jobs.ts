@@ -17,6 +17,7 @@ import { buildPage, decodeIdCursor, DEFAULT_LIMIT, MAX_LIMIT } from '../http/cur
 import { ApiError } from '../http/errors'
 import { can } from '../policy'
 export { setUserStatus } from './users'
+import { recordAdminAudit } from './adminAudit'
 
 /** The four states a queue row can be in (mirrors the schema enum). */
 export type JobStatus = 'pending' | 'processing' | 'done' | 'failed'
@@ -213,42 +214,61 @@ export async function jobsSummary(
  * `last_error` is deliberately **kept** (ruling R5): erasing the reason the
  * job failed would destroy the very evidence the ops screen exists to show,
  * and a retry that fails again overwrites it anyway.
- *
- * The write is a single guarded `UPDATE` (`WHERE id = ? AND status='failed'`),
- * so it can never resurrect a job the worker is currently processing or
- * overwrite a finished one — including when a retry races a worker pass. A
- * zero-row update is classified by re-reading the row: absent → `NOT_FOUND`,
- * otherwise `VALIDATION_ERROR` naming the current status. The refused row is
- * left untouched.
+ * The mutation executes inside a transaction with a locked row read (`for('update')`),
+ * verifying the job is failed, resetting to pending/attempts=0/cleared leases, and
+ * appending a `job_retried` audit event. A racing worker or retry that claims the row
+ * causes subsequent retries to see the updated status and throw `VALIDATION_ERROR` without
+ * duplicate audit rows. Missing rows throw `NOT_FOUND`.
  */
 export async function retryJob(actor: Actor, id: number): Promise<void> {
   await authorizeJobManage(actor)
 
-  const [result] = await db
-    .update(outboxJobs)
-    .set({
-      status: 'pending',
-      availableAt: sql`NOW(3)`,
-      attempts: 0,
-      lockedAt: null,
-      lockedBy: null,
-    })
-    .where(and(eq(outboxJobs.id, id), eq(outboxJobs.status, 'failed')))
-
-  if (result.affectedRows === 0) {
-    const [row] = await db
-      .select({ status: outboxJobs.status })
+  await withTransaction(async (tx) => {
+    const [job] = await tx
+      .select({
+        id: outboxJobs.id,
+        type: outboxJobs.type,
+        status: outboxJobs.status,
+        attempts: outboxJobs.attempts,
+        lastError: outboxJobs.lastError,
+      })
       .from(outboxJobs)
       .where(eq(outboxJobs.id, id))
-      .limit(1)
+      .for('update')
 
-    if (!row) {
+    if (!job) {
       throw ApiError.of('NOT_FOUND')
     }
-    throw ApiError.of('VALIDATION_ERROR', `Only a failed job can be retried (job ${id} is ${row.status})`, {
-      id,
-      status: row.status,
+
+    if (job.status !== 'failed') {
+      throw ApiError.of('VALIDATION_ERROR', `Only a failed job can be retried (job ${id} is ${job.status})`, {
+        id,
+        status: job.status,
+      })
+    }
+
+    await tx
+      .update(outboxJobs)
+      .set({
+        status: 'pending',
+        availableAt: sql`NOW(3)`,
+        attempts: 0,
+        lockedAt: null,
+        lockedBy: null,
+      })
+      .where(eq(outboxJobs.id, id))
+
+    await recordAdminAudit(tx, {
+      actorId: actor.id,
+      action: 'job_retried',
+      targetType: 'job',
+      targetId: id,
+      metadata: {
+        type: job.type,
+        previousAttempts: job.attempts,
+        previousLastError: job.lastError,
+      },
     })
-  }
+  })
 }
 

@@ -6,6 +6,7 @@ import { ApiError } from '../http/errors'
 import { buildPage, decodeIdCursor, DEFAULT_LIMIT, MAX_LIMIT } from '../http/cursor'
 import { authorize, can } from '../policy'
 import type { Actor, Role } from '../domain/types'
+import { recordAdminAudit } from './adminAudit'
 
 export interface MemberUser {
   id: number
@@ -42,7 +43,7 @@ export async function addMember(
   await withTransaction(async (tx) => {
     // 1. Lock team row
     const [team] = await tx
-      .select({ id: teams.id })
+      .select({ id: teams.id, name: teams.name })
       .from(teams)
       .where(eq(teams.id, teamId))
       .for('update')
@@ -63,7 +64,7 @@ export async function addMember(
     }
     // Check user exists
     const [user] = await tx
-      .select({ id: users.id })
+      .select({ id: users.id, email: users.email, displayName: users.displayName })
       .from(users)
       .where(eq(users.id, userId))
       .limit(1)
@@ -72,7 +73,7 @@ export async function addMember(
       throw ApiError.of('NOT_FOUND', 'User not found')
     }
 
-    await tx.insert(memberships).values({
+    const [memResult] = await tx.insert(memberships).values({
       teamId,
       userId,
       role,
@@ -86,6 +87,24 @@ export async function addMember(
       fromRole: null,
       toRole: role,
     })
+
+    if (actor.isAdmin) {
+      await recordAdminAudit(tx, {
+        actorId: actor.id,
+        action: 'membership_added',
+        targetType: 'membership',
+        targetId: Number(memResult.insertId),
+        metadata: {
+          teamId: team.id,
+          teamName: team.name,
+          userId: user.id,
+          email: user.email,
+          displayName: user.displayName,
+          fromRole: null,
+          toRole: role,
+        },
+      })
+    }
   })
 }
 
@@ -152,7 +171,7 @@ export async function listMembers(
 }
 
 /**
- * Updates a member's role on a team. Lead only.
+ * Updates a member's role on a team. Lead or platform administrator.
  * Enforces LAST_LEAD guard (422) if demoting the only lead.
  * Appends a 'role_changed' event with from_role and to_role.
  */
@@ -162,12 +181,12 @@ export async function setMemberRole(
   userId: number,
   role: Role,
 ): Promise<void> {
-  await authorize(actor, 'membership:manage', { kind: 'team', teamId })
+  await authorize(actor, 'membership:role:manage', { kind: 'team', teamId })
 
   await withTransaction(async (tx) => {
     // 1. Lock team row to serialize membership mutations on this team
     const [team] = await tx
-      .select({ id: teams.id })
+      .select({ id: teams.id, name: teams.name })
       .from(teams)
       .where(eq(teams.id, teamId))
       .for('update')
@@ -176,8 +195,8 @@ export async function setMemberRole(
       throw ApiError.of('NOT_FOUND', 'Team not found')
     }
 
-    // 2. Authorize actor with locked read on memberships under tx (no admin exemption)
-    await authorize(actor, 'membership:manage', { kind: 'team', teamId }, tx)
+    // 2. Authorize actor with locked read on memberships under tx
+    await authorize(actor, 'membership:role:manage', { kind: 'team', teamId }, tx)
 
     const [target] = await tx
       .select()
@@ -217,6 +236,30 @@ export async function setMemberRole(
       fromRole: target.role,
       toRole: role,
     })
+
+    if (actor.isAdmin) {
+      const [subjectUser] = await tx
+        .select({ email: users.email, displayName: users.displayName })
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1)
+
+      await recordAdminAudit(tx, {
+        actorId: actor.id,
+        action: 'membership_role_changed',
+        targetType: 'membership',
+        targetId: target.id,
+        metadata: {
+          teamId: team.id,
+          teamName: team.name,
+          userId,
+          email: subjectUser?.email ?? '',
+          displayName: subjectUser?.displayName ?? '',
+          fromRole: target.role,
+          toRole: role,
+        },
+      })
+    }
   })
 }
 
@@ -235,7 +278,7 @@ export async function removeMember(
   await withTransaction(async (tx) => {
     // 1. Lock team row to serialize membership mutations on this team
     const [team] = await tx
-      .select({ id: teams.id })
+      .select({ id: teams.id, name: teams.name })
       .from(teams)
       .where(eq(teams.id, teamId))
       .for('update')
@@ -278,5 +321,29 @@ export async function removeMember(
       fromRole: target.role,
       toRole: null,
     })
+
+    if (actor.isAdmin) {
+      const [subjectUser] = await tx
+        .select({ email: users.email, displayName: users.displayName })
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1)
+
+      await recordAdminAudit(tx, {
+        actorId: actor.id,
+        action: 'membership_removed',
+        targetType: 'membership',
+        targetId: target.id,
+        metadata: {
+          teamId,
+          teamName: team.name,
+          userId,
+          email: subjectUser?.email ?? '',
+          displayName: subjectUser?.displayName ?? '',
+          fromRole: target.role,
+          toRole: null,
+        },
+      })
+    }
   })
 }

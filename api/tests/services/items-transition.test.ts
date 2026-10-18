@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { eq } from 'drizzle-orm'
 import { closeDb, db } from '../../src/db/client'
-import { activityEvents, comments, workItems } from '../../src/db/schema'
+import { activityEvents, comments, notifications, workItems } from '../../src/db/schema'
 import { ApiError } from '../../src/http/errors'
 import { transitionItem } from '../../src/services/items'
 import { resetDb, seedItem, seedMembership, seedTeam, seedUser } from '../helpers/db'
@@ -477,5 +477,29 @@ describe('items service - transitionItem (Task 4.7)', () => {
     expect(caughtError).toBeInstanceOf(ApiError)
     expect((caughtError as ApiError).code).toBe('VALIDATION_ERROR')
     expect((caughtError as ApiError).status).toBe(422)
+  })
+
+  it('approval transition with reason emits workflow_decision notification and no separate comment alert', async () => {
+    const lead = await seedUser()
+    const member = await seedUser()
+    const team = await seedTeam()
+    await seedMembership(lead.id, team.id, 'lead')
+    await seedMembership(member.id, team.id, 'member')
+
+    const item = await seedItem(team.id, {
+      createdBy: member.id,
+      assigneeId: member.id,
+      status: 'awaiting_approval',
+    })
+
+    await transitionItem({ id: lead.id, isAdmin: false }, item.id, 'resolved', 'LGTM!')
+
+    const notifs = await db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.recipientUserId, member.id))
+
+    expect(notifs).toHaveLength(1)
+    expect(notifs[0]?.type).toBe('workflow_decision')
   })
 })

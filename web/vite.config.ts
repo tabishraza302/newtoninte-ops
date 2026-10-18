@@ -31,6 +31,7 @@ export default defineConfig({
       '/teams': apiProxy,
       '/invitations': apiProxy,
       '/admin': apiProxy,
+      '/notifications': apiProxy,
       '/health': 'http://localhost:3000',
       '/ready': 'http://localhost:3000',
     },

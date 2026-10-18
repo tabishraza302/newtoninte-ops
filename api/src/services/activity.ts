@@ -10,8 +10,8 @@ export interface ActivityInput {
   metadata?: unknown
 }
 
-export async function recordActivity(tx: Tx, e: ActivityInput): Promise<void> {
-  await tx.insert(activityEvents).values({
+export async function recordActivity(tx: Tx, e: ActivityInput): Promise<number> {
+  const [result] = await tx.insert(activityEvents).values({
     workItemId: e.workItemId,
     actorId: e.actorId,
     type: e.type,
@@ -19,6 +19,7 @@ export async function recordActivity(tx: Tx, e: ActivityInput): Promise<void> {
     toValue: e.toValue ?? null,
     metadata: e.metadata !== undefined ? e.metadata : null,
   })
+  return Number(result.insertId)
 }
 
 export const FIELD_EVENT = {

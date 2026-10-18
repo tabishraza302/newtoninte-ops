@@ -1,7 +1,14 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { useSearchParams, Navigate } from 'react-router-dom'
-import { useAdminUsers, useCreateAdminUser, useSetUserStatus, useTeams } from '../api/hooks'
-import { type PublicUser, type Role, type ListAdminUsersQuery, type CreateAdminUserInput } from '../api/types'
+import { useAdminUsers, useCreateAdminUser, useSetUserStatus, useAdminTeams } from '../api/hooks'
+import {
+  type PublicUser,
+  type Role,
+  type ListAdminUsersQuery,
+  type ListAdminTeamsQuery,
+  type CreateAdminUserInput,
+  type Team,
+} from '../api/types'
 import { ApiError } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import { commonStyles, theme } from '../theme'
@@ -46,35 +53,103 @@ export function AdminUsers(): React.ReactElement {
 export function AdminUsersTable(): React.ReactElement {
   const [searchParams, setSearchParams] = useSearchParams()
   const qParam = searchParams.get('q') ?? ''
+  const [searchInput, setSearchInput] = useState(qParam)
+  const [prevQParam, setPrevQParam] = useState(qParam)
+  const submittedUserQueriesRef = useRef<Set<string>>(new Set())
 
+  // Keep local search input synchronized with external navigation (back/forward, external URL changes)
+  // while preventing in-flight intermediate router transitions from overwriting newer user input
+  if (qParam !== prevQParam) {
+    setPrevQParam(qParam)
+    if (submittedUserQueriesRef.current.has(qParam)) {
+      submittedUserQueriesRef.current.delete(qParam)
+    } else {
+      setSearchInput(qParam)
+      submittedUserQueriesRef.current.clear()
+    }
+  }
   const [cursor, setCursor] = useState<string | undefined>(undefined)
   const [users, setUsers] = useState<PublicUser[]>([])
-  const [prevFilterKey, setPrevFilterKey] = useState(qParam)
+  const effectiveUserSearch = qParam.trim()
+  const [prevFilterKey, setPrevFilterKey] = useState(effectiveUserSearch)
 
   // Creation form state
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [email, setEmail] = useState('')
   const [displayName, setDisplayName] = useState('')
   const [password, setPassword] = useState('')
-  const [selectedTeamId, setSelectedTeamId] = useState<string>('')
+  const [selectedTeam, setSelectedTeam] = useState<Team | null>(null)
   const [selectedRole, setSelectedRole] = useState<Role>('member')
+  const [teamPickerSearch, setTeamPickerSearch] = useState('')
+  const [teamPickerCursor, setTeamPickerCursor] = useState<string | undefined>(undefined)
+  const [teamPickerTeams, setTeamPickerTeams] = useState<Team[]>([])
+  const authoritativePage1Ref = useRef<Team[]>([])
+  const effectiveTeamPickerSearch = teamPickerSearch.trim()
+  const [prevTeamPickerSearch, setPrevTeamPickerSearch] = useState('')
   const [formError, setFormError] = useState<string | null>(null)
   const [actionSuccess, setActionSuccess] = useState<string | null>(null)
   const [mutatingUserId, setMutatingUserId] = useState<number | null>(null)
 
-  if (qParam !== prevFilterKey) {
-    setPrevFilterKey(qParam)
+  if (effectiveUserSearch !== prevFilterKey) {
+    setPrevFilterKey(effectiveUserSearch)
     setCursor(undefined)
     setUsers([])
   }
 
   const adminUsersQuery: ListAdminUsersQuery = {
-    ...(qParam ? { q: qParam } : {}),
+    ...(effectiveUserSearch ? { q: effectiveUserSearch } : {}),
     ...(cursor ? { cursor } : {}),
   }
   const { data, isLoading, isFetching, error, refetch } = useAdminUsers(adminUsersQuery)
+  const userCreationEnabled = data?.userCreationEnabled ?? false
+  const nextCursor = data?.nextCursor ?? null
+  const effectiveUsers = !cursor && data?.users ? data.users : users
 
-  const { data: teamsData } = useTeams({ all: true })
+  if (effectiveTeamPickerSearch !== prevTeamPickerSearch) {
+    setPrevTeamPickerSearch(effectiveTeamPickerSearch)
+    setTeamPickerCursor(undefined)
+    if (!effectiveTeamPickerSearch && authoritativePage1Ref.current.length > 0) {
+      setTeamPickerTeams(authoritativePage1Ref.current)
+    } else {
+      setTeamPickerTeams([])
+    }
+  }
+
+  const teamPickerQuery: ListAdminTeamsQuery = {
+    ...(effectiveTeamPickerSearch ? { q: effectiveTeamPickerSearch } : {}),
+    ...(teamPickerCursor ? { cursor: teamPickerCursor } : {}),
+    limit: 10,
+  }
+  const {
+    data: teamPickerData,
+    isLoading: teamPickerLoading,
+    isFetching: teamPickerFetching,
+    error: teamPickerError,
+  } = useAdminTeams(teamPickerQuery, { enabled: showCreateForm && userCreationEnabled })
+
+  const effectivePickerTeams =
+    !teamPickerCursor && !effectiveTeamPickerSearch && authoritativePage1Ref.current.length > 0
+      ? (teamPickerData?.teams ?? authoritativePage1Ref.current)
+      : (!teamPickerCursor && teamPickerData?.teams ? teamPickerData.teams : teamPickerTeams)
+
+  useEffect(() => {
+    if (teamPickerData?.teams) {
+      if (!teamPickerCursor) {
+        if (!effectiveTeamPickerSearch) {
+          authoritativePage1Ref.current = teamPickerData.teams
+        }
+        setTeamPickerTeams(teamPickerData.teams)
+      } else {
+        setTeamPickerTeams((prev) => {
+          const freshById = new Map(teamPickerData.teams.map((t: Team) => [t.id, t]))
+          const updated = prev.map((t) => freshById.get(t.id) ?? t)
+          const prevIds = new Set(prev.map((t) => t.id))
+          const additions = teamPickerData.teams.filter((t: Team) => !prevIds.has(t.id))
+          return [...updated, ...additions]
+        })
+      }
+    }
+  }, [teamPickerData, teamPickerCursor, effectiveTeamPickerSearch])
   const createUserMutation = useCreateAdminUser()
   const setStatusMutation = useSetUserStatus()
 
@@ -94,10 +169,10 @@ export function AdminUsersTable(): React.ReactElement {
     }
   }, [data, cursor])
 
-  const userCreationEnabled = data?.userCreationEnabled ?? false
-  const nextCursor = data?.nextCursor ?? null
 
   const handleSearchChange = (val: string): void => {
+    submittedUserQueriesRef.current.add(val)
+    setSearchInput(val)
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev)
       if (val) {
@@ -160,12 +235,11 @@ export function AdminUsersTable(): React.ReactElement {
     }
 
     try {
-      const teamIdNum = selectedTeamId ? Number(selectedTeamId) : undefined
       const payload: CreateAdminUserInput = {
         email: trimmedEmail,
         displayName: trimmedName,
         password,
-        ...(teamIdNum !== undefined ? { teamId: teamIdNum, role: selectedRole } : {}),
+        ...(selectedTeam ? { teamId: selectedTeam.id, role: selectedRole } : {}),
       }
       const created = await createUserMutation.mutateAsync(payload)
 
@@ -173,8 +247,14 @@ export function AdminUsersTable(): React.ReactElement {
       setEmail('')
       setDisplayName('')
       setPassword('')
-      setSelectedTeamId('')
+      setSelectedTeam(null)
       setSelectedRole('member')
+      setTeamPickerSearch('')
+      setTeamPickerCursor(undefined)
+      setPrevTeamPickerSearch('')
+      if (authoritativePage1Ref.current.length > 0) {
+        setTeamPickerTeams(authoritativePage1Ref.current)
+      }
       setShowCreateForm(false)
       // Refetch from beginning to see the newly created user and eliminate stale accumulated rows
       setCursor(undefined)
@@ -260,6 +340,14 @@ export function AdminUsersTable(): React.ReactElement {
               onClick={() => {
                 setShowCreateForm((prev) => !prev)
                 setFormError(null)
+                setSelectedTeam(null)
+                setSelectedRole('member')
+                setTeamPickerSearch('')
+                setTeamPickerCursor(undefined)
+                setPrevTeamPickerSearch('')
+                if (authoritativePage1Ref.current.length > 0) {
+                  setTeamPickerTeams(authoritativePage1Ref.current)
+                }
               }}
               style={commonStyles.buttonPrimary}
             >
@@ -424,32 +512,143 @@ export function AdminUsersTable(): React.ReactElement {
                 borderTop: '1px solid #f1f5f9',
               }}
             >
-              <div>
-                <label htmlFor="create-user-team" style={commonStyles.label}>
+              <div style={{ gridColumn: '1 / -1' }}>
+                <label htmlFor="team-picker-search" style={commonStyles.label}>
                   Initial Team (Optional)
                 </label>
-                <select
-                  id="create-user-team"
-                  value={selectedTeamId}
-                  onChange={(e) => setSelectedTeamId(e.target.value)}
-                  style={commonStyles.select}
-                >
-                  <option value="">No Team (Unassigned)</option>
-                  {teamsData?.teams.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name} ({t.slug})
-                    </option>
-                  ))}
-                </select>
+                {selectedTeam ? (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '0.65rem 0.85rem',
+                      backgroundColor: '#f1f5f9',
+                      border: '1px solid #cbd5e1',
+                      borderRadius: '6px',
+                    }}
+                  >
+                    <div>
+                      <span style={{ fontSize: '0.8125rem', color: '#64748b' }}>Selected: </span>
+                      <span style={{ fontWeight: 600, fontSize: '0.875rem', color: '#0f172a' }}>
+                        {selectedTeam.name}
+                      </span>{' '}
+                      <span style={{ fontSize: '0.75rem', color: '#64748b' }}>({selectedTeam.slug})</span>
+                    </div>
+                    <button
+                      type="button"
+                      aria-label="Clear selected team"
+                      onClick={() => setSelectedTeam(null)}
+                      style={{
+                        ...commonStyles.buttonSecondary,
+                        padding: '0.25rem 0.6rem',
+                        fontSize: '0.75rem',
+                      }}
+                    >
+                      Clear team
+                    </button>
+                  </div>
+                ) : (
+                  <div>
+                    <input
+                      id="team-picker-search"
+                      type="search"
+                      aria-label="Search initial team"
+                      placeholder="Search teams by name or slug…"
+                      value={teamPickerSearch}
+                      onChange={(e) => setTeamPickerSearch(e.target.value)}
+                      style={{ ...commonStyles.input, marginBottom: '0.5rem' }}
+                    />
+                    <div
+                      role="region"
+                      aria-label="Initial team search results"
+                      style={{
+                        border: '1px solid #e2e8f0',
+                        borderRadius: '6px',
+                        maxHeight: '180px',
+                        overflowY: 'auto',
+                        backgroundColor: '#ffffff',
+                      }}
+                    >
+                      {teamPickerLoading && effectivePickerTeams.length === 0 && (
+                        <div style={{ padding: '1rem', textAlign: 'center', color: '#64748b', fontSize: '0.8125rem' }}>
+                          Searching teams…
+                        </div>
+                      )}
+                      {teamPickerError && (
+                        <div style={{ padding: '0.75rem', color: '#dc2626', fontSize: '0.8125rem' }}>
+                          Failed to search teams.
+                        </div>
+                      )}
+                      {!teamPickerLoading && !teamPickerError && effectivePickerTeams.length === 0 && (
+                        <div style={{ padding: '1rem', textAlign: 'center', color: '#64748b', fontSize: '0.8125rem' }}>
+                          No teams found.
+                        </div>
+                      )}
+                      {effectivePickerTeams.map((team) => (
+                        <div
+                          key={team.id}
+                          onClick={() => setSelectedTeam(team)}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            padding: '0.55rem 0.85rem',
+                            borderBottom: '1px solid #f1f5f9',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <div>
+                            <span style={{ fontWeight: 600, fontSize: '0.8125rem', color: '#0f172a' }}>{team.name}</span>{' '}
+                            <span style={{ fontSize: '0.75rem', color: '#64748b' }}>({team.slug})</span>
+                          </div>
+                          <button
+                            type="button"
+                            aria-label={`Select team ${team.name}`}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setSelectedTeam(team)
+                            }}
+                            style={{
+                              ...commonStyles.buttonSecondary,
+                              padding: '0.2rem 0.55rem',
+                              fontSize: '0.75rem',
+                            }}
+                          >
+                            Select
+                          </button>
+                        </div>
+                      ))}
+                      {teamPickerData?.nextCursor && (
+                        <div style={{ padding: '0.4rem', textAlign: 'center', backgroundColor: '#f8fafc' }}>
+                          <button
+                            type="button"
+                            onClick={() => setTeamPickerCursor(teamPickerData.nextCursor ?? undefined)}
+                            disabled={teamPickerFetching}
+                            style={{
+                              ...commonStyles.buttonSecondary,
+                              padding: '0.25rem 0.75rem',
+                              fontSize: '0.75rem',
+                              width: '100%',
+                            }}
+                          >
+                            {teamPickerFetching ? 'Loading teams…' : 'Load more teams'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
 
-              {selectedTeamId && (
+              {selectedTeam && (
                 <div>
                   <label htmlFor="create-user-role" style={commonStyles.label}>
                     Team Role *
                   </label>
                   <select
                     id="create-user-role"
+                    aria-label="Team Role"
                     value={selectedRole}
                     onChange={(e) => setSelectedRole(e.target.value as Role)}
                     style={commonStyles.select}
@@ -468,6 +667,14 @@ export function AdminUsersTable(): React.ReactElement {
                 onClick={() => {
                   setShowCreateForm(false)
                   setFormError(null)
+                  setSelectedTeam(null)
+                  setSelectedRole('member')
+                  setTeamPickerSearch('')
+                  setTeamPickerCursor(undefined)
+                  setPrevTeamPickerSearch('')
+                  if (authoritativePage1Ref.current.length > 0) {
+                    setTeamPickerTeams(authoritativePage1Ref.current)
+                  }
                 }}
                 style={commonStyles.buttonSecondary}
               >
@@ -514,7 +721,7 @@ export function AdminUsersTable(): React.ReactElement {
             type="search"
             aria-label="Search users"
             placeholder="Search by name or email…"
-            value={qParam}
+            value={searchInput}
             onChange={(e) => handleSearchChange(e.target.value)}
             style={commonStyles.input}
           />
@@ -523,7 +730,7 @@ export function AdminUsersTable(): React.ReactElement {
 
       {/* Content Section */}
       <section aria-label="Users List">
-        {isLoading && users.length === 0 && (
+        {isLoading && effectiveUsers.length === 0 && (
           <div
             role="status"
             style={{
@@ -546,7 +753,7 @@ export function AdminUsersTable(): React.ReactElement {
           </div>
         )}
 
-        {!isLoading && !error && users.length === 0 && (
+        {!isLoading && !error && effectiveUsers.length === 0 && (
           <div
             role="status"
             data-testid="empty-users-state"
@@ -577,7 +784,7 @@ export function AdminUsersTable(): React.ReactElement {
           </div>
         )}
 
-        {users.length > 0 && (
+        {effectiveUsers.length > 0 && (
           <div
             className="users-table-container"
             data-testid="users-table"
@@ -618,7 +825,7 @@ export function AdminUsersTable(): React.ReactElement {
                 </tr>
               </thead>
               <tbody>
-                {users.map((u) => {
+                {effectiveUsers.map((u) => {
                   const isMutating = mutatingUserId === u.id
                   const isActive = u.status === 'active'
 

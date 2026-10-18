@@ -4,6 +4,7 @@ import { runMigrations } from './migrate'
 // Every table created by the schema, plus Drizzle's own migration journal.
 // Dropped child-first is unnecessary because FOREIGN_KEY_CHECKS is disabled.
 const TABLES = [
+  'admin_audit_events',
   'users',
   'teams',
   'memberships',
@@ -14,6 +15,7 @@ const TABLES = [
   'work_items',
   'activity_events',
   'comments',
+  'notifications',
   'outbox_jobs',
   'idempotency_keys',
   '__drizzle_migrations',

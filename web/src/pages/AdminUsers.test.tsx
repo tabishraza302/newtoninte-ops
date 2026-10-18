@@ -1,7 +1,7 @@
 import React from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen, fireEvent, waitFor } from '@testing-library/react'
-import { Routes, Route } from 'react-router-dom'
+import { screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { Routes, Route, useSearchParams } from 'react-router-dom'
 import { renderWithProviders } from '../test/test-utils'
 import { AuthContext, AuthProvider, type AuthContextValue, type User } from '../auth/AuthContext'
 import { AppRoutes } from '../App'
@@ -114,13 +114,20 @@ describe('AdminUsers Page', () => {
         )
       }
 
-      if (url === '/teams' || url.startsWith('/teams?')) {
+      if ((url === '/admin/teams' || url.startsWith('/admin/teams?')) && method === 'GET') {
+        const parsedUrl = new URL(url, 'http://localhost')
+        const q = parsedUrl.searchParams.get('q')?.toLowerCase() ?? ''
+        const allTeams = [
+          { id: 1, name: 'Core Ops', slug: 'core-ops' },
+          { id: 2, name: 'Platform', slug: 'platform' },
+        ]
+        const filtered = allTeams.filter(
+          (t) => t.name.toLowerCase().includes(q) || t.slug.toLowerCase().includes(q),
+        )
         return Promise.resolve(
           jsonResponse({
-            teams: [
-              { id: 1, name: 'Core Ops', slug: 'core-ops' },
-              { id: 2, name: 'Platform', slug: 'platform' },
-            ],
+            teams: filtered,
+            nextCursor: null,
           }),
         )
       }
@@ -336,17 +343,15 @@ describe('AdminUsers Page', () => {
       target: { value: 'supersecret123' },
     })
 
-    // Select team
-    fireEvent.change(screen.getByLabelText(/Initial Team/i), {
-      target: { value: '1' },
-    })
+    // Select team via searchable picker
+    const selectTeamBtn = await screen.findByRole('button', { name: /Select team Core Ops/i })
+    fireEvent.click(selectTeamBtn)
 
     // Role selector appears when team is selected
     expect(screen.getByLabelText(/Team Role/i)).toBeInTheDocument()
     fireEvent.change(screen.getByLabelText(/Team Role/i), {
       target: { value: 'lead' },
     })
-
     const submitBtn = screen.getByRole('button', { name: /^Create User$/i })
     fireEvent.click(submitBtn)
 
@@ -460,6 +465,9 @@ describe('AdminUsers Page', () => {
           }),
         )
       }
+      if (url.includes('/notifications/summary')) {
+        return Promise.resolve(jsonResponse({ unreadCount: 0 }))
+      }
       return Promise.resolve(new Response(JSON.stringify({ error: 'not found' }), { status: 404 }))
     })
 
@@ -494,6 +502,9 @@ describe('AdminUsers Page', () => {
           }),
         )
       }
+      if (url.includes('/notifications/summary')) {
+        return Promise.resolve(jsonResponse({ unreadCount: 0 }))
+      }
       return Promise.resolve(new Response(JSON.stringify({ error: 'not found' }), { status: 404 }))
     })
 
@@ -508,5 +519,431 @@ describe('AdminUsers Page', () => {
       expect(screen.getByText(/Newtonite Operations/)).toBeInTheDocument()
     })
     expect(screen.queryByRole('link', { name: /^Users$/i })).not.toBeInTheDocument()
+  })
+  it('provisions a new user without team and verifies no teamId/role in payload', async () => {
+    mockUsersApi([user1])
+    await renderAdminUsers()
+
+    await screen.findByText('Alice Engineer')
+    fireEvent.click(screen.getByRole('button', { name: /Create User/i }))
+
+    fireEvent.change(screen.getByLabelText(/Email Address/i), {
+      target: { value: 'noteam@company.test' },
+    })
+    fireEvent.change(screen.getByLabelText(/Display Name/i), {
+      target: { value: 'No Team User' },
+    })
+    fireEvent.change(screen.getByLabelText(/Initial Password/i), {
+      target: { value: 'supersecret123' },
+    })
+
+    expect(screen.queryByLabelText(/Team Role/i)).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /^Create User$/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText(/User noteam@company.test created successfully/i)).toBeInTheDocument()
+    })
+
+    const postCall = fetchMock.mock.calls.find(
+      (c) => String(c[0]) === '/admin/users' && c[1]?.method === 'POST',
+    )
+    expect(postCall).toBeDefined()
+    const body = JSON.parse(postCall?.[1]?.body as string)
+    expect(body).toEqual({
+      email: 'noteam@company.test',
+      displayName: 'No Team User',
+      password: 'supersecret123',
+    })
+    expect(body.teamId).toBeUndefined()
+    expect(body.role).toBeUndefined()
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('all=true'))).toBe(false)
+  })
+
+  it('searches and paginates teams in the initial-team picker and allows clearing selection', async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), 'http://localhost')
+      const method = init?.method?.toUpperCase() ?? 'GET'
+
+      if (url.pathname.startsWith('/admin/users') && method === 'GET') {
+        return Promise.resolve(jsonResponse({ users: [user1], nextCursor: null, userCreationEnabled: true }))
+      }
+      if (url.pathname === '/admin/teams' && method === 'GET') {
+        const q = url.searchParams.get('q')
+        if (q === 'search-term') {
+          return Promise.resolve(jsonResponse({
+            teams: [{ id: 3, name: 'Search Team', slug: 'search-team' }],
+            nextCursor: null,
+          }))
+        }
+        if (url.searchParams.get('cursor') === 'cursor-1') {
+          return Promise.resolve(jsonResponse({
+            teams: [
+              { id: 1, name: 'Core Ops', slug: 'core-ops' },
+              { id: 2, name: 'Platform', slug: 'platform' },
+            ],
+            nextCursor: null,
+          }))
+        }
+        return Promise.resolve(jsonResponse({
+          teams: [{ id: 1, name: 'Core Ops', slug: 'core-ops' }],
+          nextCursor: 'cursor-1',
+        }))
+      }
+      return Promise.resolve(jsonResponse({}))
+    })
+
+    await renderAdminUsers()
+    await screen.findByText('Alice Engineer')
+    fireEvent.click(screen.getByRole('button', { name: /Create User/i }))
+
+    await screen.findByText('Core Ops')
+    expect(screen.queryByText('Platform')).not.toBeInTheDocument()
+
+    // Load more teams
+    fireEvent.click(screen.getByRole('button', { name: /Load more teams/i }))
+    await screen.findByText('Platform')
+    expect(screen.getAllByText(/Core Ops/)).toHaveLength(1)
+
+    // Search teams
+    fireEvent.change(screen.getByRole('searchbox', { name: /Search initial team/i }), {
+      target: { value: 'search-term' },
+    })
+    await screen.findByText('Search Team')
+    expect(screen.queryByText('Platform')).not.toBeInTheDocument()
+
+    // Select team
+    fireEvent.click(screen.getByRole('button', { name: /Select team Search Team/i }))
+    expect(screen.getByText('Selected:')).toBeInTheDocument()
+    expect(screen.getByLabelText(/Team Role/i)).toBeInTheDocument()
+
+    // Clear selected team
+    fireEvent.click(screen.getByRole('button', { name: /Clear selected team/i }))
+    expect(screen.queryByLabelText(/Team Role/i)).not.toBeInTheDocument()
+    expect(screen.getByRole('searchbox', { name: /Search initial team/i })).toBeInTheDocument()
+  })
+
+  it('restores authoritative cached page1 teams when initial-team picker is cancelled and reopened without needing search', async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), 'http://localhost')
+      const method = init?.method?.toUpperCase() ?? 'GET'
+
+      if (url.pathname.startsWith('/admin/users') && method === 'GET') {
+        return Promise.resolve(jsonResponse({ users: [user1], nextCursor: null, userCreationEnabled: true }))
+      }
+      if (url.pathname === '/admin/teams' && method === 'GET') {
+        return Promise.resolve(
+          jsonResponse({
+            teams: [
+              { id: 1, name: 'Core Ops', slug: 'core-ops' },
+              { id: 2, name: 'Platform', slug: 'platform' },
+            ],
+            nextCursor: null,
+          }),
+        )
+      }
+      return Promise.resolve(jsonResponse({}))
+    })
+
+    await renderAdminUsers()
+    await screen.findByText('Alice Engineer')
+
+    // Open create user form
+    fireEvent.click(screen.getByRole('button', { name: /Create User/i }))
+    await screen.findByText('Core Ops')
+    expect(screen.getByText('Platform')).toBeInTheDocument()
+
+    // Cancel create user form
+    const formEl = screen.getByRole('button', { name: /^Create User$/i }).closest('form')!
+    fireEvent.click(within(formEl).getByRole('button', { name: /^Cancel$/i }))
+    await waitFor(() => {
+      expect(screen.queryByText('Provision New User')).not.toBeInTheDocument()
+    })
+
+    // Reopen create user form
+    fireEvent.click(screen.getByRole('button', { name: /Create User/i }))
+    await screen.findByText('Provision New User')
+
+    // Results must be restored from cache without needing to search
+    expect(screen.getByText('Core Ops')).toBeInTheDocument()
+    expect(screen.getByText('Platform')).toBeInTheDocument()
+    expect(screen.queryByText('No teams found.')).not.toBeInTheDocument()
+  })
+
+  it('restores authoritative cached page1 teams when picker is cancelled after continuation or search', async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), 'http://localhost')
+      const method = init?.method?.toUpperCase() ?? 'GET'
+
+      if (url.pathname.startsWith('/admin/users') && method === 'GET') {
+        return Promise.resolve(jsonResponse({ users: [user1], nextCursor: null, userCreationEnabled: true }))
+      }
+      if (url.pathname === '/admin/teams' && method === 'GET') {
+        const q = url.searchParams.get('q')
+        if (q === 'search-team') {
+          return Promise.resolve(
+            jsonResponse({
+              teams: [{ id: 3, name: 'Search Team', slug: 'search-team' }],
+              nextCursor: null,
+            }),
+          )
+        }
+        if (url.searchParams.get('cursor') === 'cursor-1') {
+          return Promise.resolve(
+            jsonResponse({
+              teams: [{ id: 2, name: 'Platform', slug: 'platform' }],
+              nextCursor: null,
+            }),
+          )
+        }
+        return Promise.resolve(
+          jsonResponse({
+            teams: [{ id: 1, name: 'Core Ops', slug: 'core-ops' }],
+            nextCursor: 'cursor-1',
+          }),
+        )
+      }
+      return Promise.resolve(jsonResponse({}))
+    })
+
+    await renderAdminUsers()
+    await screen.findByText('Alice Engineer')
+
+    // 1. Continuation then Cancel
+    fireEvent.click(screen.getByRole('button', { name: /Create User/i }))
+    await screen.findByText('Core Ops')
+
+    // Paginate to load page 2
+    fireEvent.click(screen.getByRole('button', { name: /Load more teams/i }))
+    await screen.findByText('Platform')
+
+    // Cancel
+    const formEl1 = screen.getByRole('button', { name: /^Create User$/i }).closest('form')!
+    fireEvent.click(within(formEl1).getByRole('button', { name: /^Cancel$/i }))
+    await waitFor(() => {
+      expect(screen.queryByText('Provision New User')).not.toBeInTheDocument()
+    })
+    // Reopen: authoritative cached page1 must be restored, continuation reset
+    fireEvent.click(screen.getByRole('button', { name: /Create User/i }))
+    await screen.findByText('Provision New User')
+    expect(screen.getByText('Core Ops')).toBeInTheDocument()
+    expect(screen.queryByText('Platform')).not.toBeInTheDocument()
+    expect(screen.queryByText('No teams found.')).not.toBeInTheDocument()
+
+    // 2. Search then Cancel
+    fireEvent.change(screen.getByRole('searchbox', { name: /Search initial team/i }), {
+      target: { value: 'search-team' },
+    })
+    await screen.findByText('Search Team')
+    expect(screen.queryByText('Core Ops')).not.toBeInTheDocument()
+
+    // Cancel
+    const formEl2 = screen.getByRole('button', { name: /^Create User$/i }).closest('form')!
+    fireEvent.click(within(formEl2).getByRole('button', { name: /^Cancel$/i }))
+    await waitFor(() => {
+      expect(screen.queryByText('Provision New User')).not.toBeInTheDocument()
+    })
+
+    // Reopen: authoritative cached page1 must be restored, search reset
+    fireEvent.click(screen.getByRole('button', { name: /Create User/i }))
+    await screen.findByText('Provision New User')
+    expect(screen.getByText('Core Ops')).toBeInTheDocument()
+    expect(screen.queryByText('Search Team')).not.toBeInTheDocument()
+    expect(screen.queryByText('No teams found.')).not.toBeInTheDocument()
+  })
+
+  it('preserves team picker matching results when typing leading and trailing search whitespace', async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), 'http://localhost')
+      const method = init?.method?.toUpperCase() ?? 'GET'
+
+       if (url.pathname.startsWith('/admin/users') && method === 'GET') {
+        return Promise.resolve(jsonResponse({ users: [user1], nextCursor: null, userCreationEnabled: true }))
+      }
+      if (url.pathname === '/admin/teams' && method === 'GET') {
+        const q = url.searchParams.get('q')?.toLowerCase() ?? ''
+        const allTeams = [
+          { id: 1, name: 'Core Ops', slug: 'core-ops' },
+          { id: 2, name: 'Platform', slug: 'platform' },
+        ]
+        const filtered = allTeams.filter(
+          (t) => t.name.toLowerCase().includes(q) || t.slug.toLowerCase().includes(q),
+        )
+        return Promise.resolve(
+          jsonResponse({
+            teams: filtered,
+            nextCursor: null,
+          }),
+        )
+      }
+      return Promise.resolve(jsonResponse({}))
+    })
+
+    await renderAdminUsers()
+    await screen.findByText('Alice Engineer')
+    fireEvent.click(screen.getByRole('button', { name: /Create User/i }))
+    await screen.findByText('Core Ops')
+
+    const searchBox = screen.getByRole('searchbox', { name: /Search initial team/i })
+
+    // Type query matching Core Ops
+    fireEvent.change(searchBox, { target: { value: 'Core' } })
+    await screen.findByText('Core Ops')
+    expect(screen.queryByText('Platform')).not.toBeInTheDocument()
+
+    // Add trailing whitespace
+    fireEvent.change(searchBox, { target: { value: 'Core ' } })
+    // The raw input preserves the whitespace
+    expect(searchBox).toHaveValue('Core ')
+    // Results must NOT be cleared to empty
+    expect(screen.getByText('Core Ops')).toBeInTheDocument()
+    expect(screen.queryByText('No teams found.')).not.toBeInTheDocument()
+
+    // Add leading whitespace
+    fireEvent.change(searchBox, { target: { value: '  Core ' } })
+    expect(searchBox).toHaveValue('  Core ')
+    expect(screen.getByText('Core Ops')).toBeInTheDocument()
+    expect(screen.queryByText('No teams found.')).not.toBeInTheDocument()
+  })
+
+  it('synchronously updates search users input state and normalizes whitespace in search query', async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : String(input)
+      if (url.includes('q=alice')) {
+        return Promise.resolve(
+          jsonResponse({
+            users: [user1],
+            nextCursor: null,
+            userCreationEnabled: true,
+          }),
+        )
+      }
+      return Promise.resolve(
+        jsonResponse({
+          users: [user1, user2],
+          nextCursor: null,
+          userCreationEnabled: true,
+        }),
+      )
+    })
+
+    await renderAdminUsers()
+    await waitFor(() => {
+      expect(screen.getByText('Alice Engineer')).toBeInTheDocument()
+      expect(screen.getByText('Bob Manager')).toBeInTheDocument()
+    })
+
+    const searchInput = screen.getByLabelText(/search users/i)
+
+    // Synchronous local state update with trailing whitespace
+    fireEvent.change(searchInput, { target: { value: 'alice ' } })
+    expect(searchInput).toHaveValue('alice ')
+
+    await waitFor(() => {
+      expect(screen.getByText('Alice Engineer')).toBeInTheDocument()
+      expect(screen.queryByText('Bob Manager')).not.toBeInTheDocument()
+    })
+  })
+
+  it('retains complete search text during rapid sequential keystrokes through pending router transitions without dropping trailing characters', async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : String(input)
+      if (url.includes('q=Alice+p') || url.includes('q=Alice%20p') || url.includes('q=Alice p')) {
+        return Promise.resolve(
+          jsonResponse({
+            users: [user1],
+            nextCursor: null,
+            userCreationEnabled: true,
+          }),
+        )
+      }
+      return Promise.resolve(
+        jsonResponse({
+          users: [user1, user2],
+          nextCursor: null,
+          userCreationEnabled: true,
+        }),
+      )
+    })
+
+    await renderAdminUsers()
+    await waitFor(() => {
+      expect(screen.getByText('Alice Engineer')).toBeInTheDocument()
+    })
+
+    const searchInput = screen.getByLabelText(/search users/i) as HTMLInputElement
+
+    // Rapid sequential keystrokes simulating real typing: "Alice" -> "Alice " -> "Alice p"
+    const sequence = ['Alice', 'Alice ', 'Alice p']
+    for (const val of sequence) {
+      fireEvent.change(searchInput, { target: { value: val } })
+    }
+
+    // Must synchronously hold the newest value and not be overwritten by intermediate router transition for "Alice"
+    expect(searchInput.value).toBe('Alice p')
+
+    await waitFor(() => {
+      expect(searchInput.value).toBe('Alice p')
+    })
+  })
+
+  it('synchronizes search users input on external navigation and URL search params change', async () => {
+    mockUsersApi([user1, user2])
+
+    function NavigationHarness() {
+      const [searchParams, setSearchParams] = useSearchParams()
+      return (
+        <div>
+          <button
+            data-testid="external-nav-btn"
+            onClick={() => {
+              const next = new URLSearchParams(searchParams)
+              next.set('q', 'external_update')
+              setSearchParams(next)
+            }}
+          >
+            External Nav
+          </button>
+          <button
+            data-testid="external-clear-btn"
+            onClick={() => {
+              const next = new URLSearchParams(searchParams)
+              next.delete('q')
+              setSearchParams(next)
+            }}
+          >
+            External Clear
+          </button>
+          <AdminUsers />
+        </div>
+      )
+    }
+
+    renderWithProviders(
+      <AuthContext.Provider value={authValue()}>
+        <Routes>
+          <Route path="/admin/users" element={<NavigationHarness />} />
+        </Routes>
+      </AuthContext.Provider>,
+      { route: '/admin/users' },
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('Alice Engineer')).toBeInTheDocument()
+    })
+
+    const searchInput = screen.getByLabelText(/search users/i) as HTMLInputElement
+
+    // External navigation setting q=external_update
+    fireEvent.click(screen.getByTestId('external-nav-btn'))
+    await waitFor(() => {
+      expect(searchInput.value).toBe('external_update')
+    })
+
+    // External navigation clearing q
+    fireEvent.click(screen.getByTestId('external-clear-btn'))
+    await waitFor(() => {
+      expect(searchInput.value).toBe('')
+    })
   })
 })

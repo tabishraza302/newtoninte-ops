@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { eq } from 'drizzle-orm'
 import { closeDb, db } from '../../src/db/client'
-import { activityEvents, outboxJobs, workItems } from '../../src/db/schema'
+import { activityEvents, notifications, outboxJobs, workItems } from '../../src/db/schema'
 import { ApiError } from '../../src/http/errors'
 import { createItem, emailAssigned } from '../../src/services/items'
 import { resetDb, seedMembership, seedTeam, seedUser } from '../helpers/db'
@@ -144,6 +144,10 @@ describe('items service - createItem (Task 4.3)', () => {
       teamName: 'Alpha Squad',
       itemId: item.id,
     })
+
+    const notifs = await db.select().from(notifications).where(eq(notifications.recipientUserId, member.id))
+    expect(notifs).toHaveLength(1)
+    expect(notifs[0]?.type).toBe('assigned')
   })
 
   it('member assigning another member is FORBIDDEN', async () => {

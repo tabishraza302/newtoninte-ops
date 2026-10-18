@@ -10,6 +10,7 @@ import { invitationsRouter } from './http/routes/invitations'
 import { authRouter } from './http/routes/auth'
 import { itemsRouter } from './http/routes/items'
 import { adminRouter } from './http/routes/admin'
+import { notificationsRouter } from './http/routes/notifications'
 
 export function createApp(): Express {
   const app = express()
@@ -24,6 +25,7 @@ export function createApp(): Express {
   app.use(authRouter)
   app.use(itemsRouter)
   app.use(adminRouter)
+  app.use(notificationsRouter)
   app.use(notFound())
   app.use(errorHandler())
   return app

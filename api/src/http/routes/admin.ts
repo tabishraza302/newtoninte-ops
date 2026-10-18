@@ -1,20 +1,19 @@
 // The `/admin` HTTP surface (spec §9, §12.2): the ops screen's four calls into
 // the Task 5.1 service in `services/jobs.ts`.
 //
-// The routes own exactly three things — authentication (`requireAuth`),
-// request *shape* (Zod schemas via `parse`, so a typo is a 422 and never a 500),
-// and status codes. Authorization is deliberately absent here: every operation
-// in the service re-checks `job:manage`/`isAdmin` against the actor, so a route
-// that forgot a check could not widen the surface, and there is exactly one
-// place where the admin rule lives.
-//
+// The routes own authentication (`requireAuth`), request *shape* (Zod schemas via `parse`,
+// so a typo is a 422 and never a 500), status codes, and route-level administrative gates
+// (such as `PATCH /admin/teams/:id/members/:userId` enforcing platform admin status over
+// shared role operations that also admit team leads on team routes).
 // `GET /admin/jobs` mirrors `/items`' list shape: a keyset cursor (never
 // `OFFSET`) and a `nextCursor` the caller feeds back verbatim.
 
 import { Router, type Request, type Response } from 'express'
 import { z } from 'zod'
 import { outboxJobs } from '../../db/schema'
-import { OUTBOX_TYPES, ROLES } from '../../domain/types'
+import { ADMIN_AUDIT_ACTIONS, OUTBOX_TYPES, ROLES } from '../../domain/types'
+import { can } from '../../policy'
+import { ApiError } from '../errors'
 import { currentActor, requireAuth } from '../middleware/auth'
 import { parse, paginationSchema } from '../validate'
 import {
@@ -25,7 +24,9 @@ import {
   type ListJobsQuery,
 } from '../../services/jobs'
 import { createUser, listUsers, type CreateUserInput, type ListUsersQuery } from '../../services/users'
-import { adminListTeamMembers, adminRemoveTeamMember } from '../../services/teams'
+import { adminListTeamMembers, adminRemoveTeamMember, listAdminTeams, type ListAdminTeamsQuery } from '../../services/teams'
+import { setMemberRole } from '../../services/memberships'
+import { listAdminAudit, type ListAdminAuditQuery } from '../../services/adminAudit'
 export const adminRouter: Router = Router()
 
 // The filter values are enums, not free strings: an unknown status would
@@ -61,6 +62,19 @@ const setUserStatusBodySchema = z.object({
   status: z.enum(['active', 'disabled']),
 })
 const listUsersQuerySchema = paginationSchema.extend({
+  q: z.string().trim().optional(),
+})
+
+const listAdminTeamsQuerySchema = paginationSchema.extend({
+  q: z.string().trim().optional(),
+})
+
+const setTeamMemberRoleBodySchema = z.object({
+  role: z.enum(ROLES),
+})
+
+const listAuditLogQuerySchema = paginationSchema.extend({
+  action: z.enum(ADMIN_AUDIT_ACTIONS).optional(),
   q: z.string().trim().optional(),
 })
 
@@ -179,6 +193,23 @@ adminRouter.post('/admin/users', requireAuth(), async (req: Request, res: Respon
   }
 })
 
+// GET /admin/teams
+adminRouter.get('/admin/teams', requireAuth(), async (req: Request, res: Response, next) => {
+  try {
+    const actor = currentActor(req)
+    const query = parse(listAdminTeamsQuerySchema, req.query)
+    const listQuery: ListAdminTeamsQuery = {
+      limit: query.limit,
+      ...(query.q !== undefined ? { q: query.q } : {}),
+      ...(query.cursor !== undefined ? { cursor: query.cursor } : {}),
+    }
+    const result = await listAdminTeams(actor, listQuery)
+    res.status(200).json(result)
+  } catch (err) {
+    next(err)
+  }
+})
+
 // GET /admin/teams/:id/members
 adminRouter.get('/admin/teams/:id/members', requireAuth(), async (req: Request, res: Response, next) => {
   try {
@@ -199,6 +230,40 @@ adminRouter.delete('/admin/teams/:id/members/:userId', requireAuth(), async (req
     const { id, userId } = parse(teamMemberParamSchema, req.params)
     await adminRemoveTeamMember(actor, id, userId)
     res.status(204).end()
+  } catch (err) {
+    next(err)
+  }
+})
+
+// PATCH /admin/teams/:id/members/:userId
+adminRouter.patch('/admin/teams/:id/members/:userId', requireAuth(), async (req: Request, res: Response, next) => {
+  try {
+    const actor = currentActor(req)
+    if (!(await can(actor, 'user:manage'))) {
+      throw ApiError.of('FORBIDDEN')
+    }
+    const { id, userId } = parse(teamMemberParamSchema, req.params)
+    const { role } = parse(setTeamMemberRoleBodySchema, req.body)
+    await setMemberRole(actor, id, userId, role)
+    res.status(200).json({ status: 'ok' })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /admin/audit-log
+adminRouter.get('/admin/audit-log', requireAuth(), async (req: Request, res: Response, next) => {
+  try {
+    const actor = currentActor(req)
+    const query = parse(listAuditLogQuerySchema, req.query)
+    const listQuery: ListAdminAuditQuery = {
+      limit: query.limit,
+      ...(query.action !== undefined ? { action: query.action } : {}),
+      ...(query.q !== undefined ? { q: query.q } : {}),
+      ...(query.cursor !== undefined ? { cursor: query.cursor } : {}),
+    }
+    const result = await listAdminAudit(actor, listQuery)
+    res.status(200).json(result)
   } catch (err) {
     next(err)
   }

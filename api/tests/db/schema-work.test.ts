@@ -3,7 +3,7 @@ import * as s from '../../src/db/schema'
 import { ACTIVITY_TYPES, type ActivityType } from '../../src/domain/types'
 describe('schema: work', () => {
   it('exposes the work tables', () => {
-    for (const t of ['workItems','activityEvents','comments','outboxJobs','idempotencyKeys'])
+    for (const t of ['workItems','activityEvents','comments','notifications','outboxJobs','idempotencyKeys'])
       expect(s).toHaveProperty(t)
   })
   it('ACTIVITY_TYPES has the 9 activity members', () => {

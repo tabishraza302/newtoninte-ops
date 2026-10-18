@@ -17,7 +17,7 @@ import { eq, sql } from 'drizzle-orm'
 import type { Express } from 'express'
 import { createApp } from '../../src/app'
 import { closeDb, db } from '../../src/db/client'
-import { outboxJobs, users } from '../../src/db/schema'
+import { adminAuditEvents, outboxJobs, users } from '../../src/db/schema'
 import type { OutboxJobType } from '../../src/domain/types'
 import { signAccessToken } from '../../src/services/tokens'
 import { resetDb, seedUser } from '../helpers/db'
@@ -489,6 +489,83 @@ describe('Admin routes (Task 5.2)', () => {
 
       expect(res.status).toBe(404)
       expect(res.body.error.code).toBe('NOT_FOUND')
+    })
+  })
+
+  describe('GET /admin/audit-log', () => {
+    it('rejects unauthenticated callers with 401 UNAUTHENTICATED', async () => {
+      const res = await request(app).get('/admin/audit-log')
+      expect(res.status).toBe(401)
+      expect(res.body.error.code).toBe('UNAUTHENTICATED')
+    })
+
+    it('rejects non-admin callers with 403 FORBIDDEN', async () => {
+      const token = await memberAuth()
+      const res = await request(app).get('/admin/audit-log').set('Authorization', token)
+      expect(res.status).toBe(403)
+      expect(res.body.error.code).toBe('FORBIDDEN')
+    })
+
+    it('rejects invalid action filter with 422 VALIDATION_ERROR', async () => {
+      const token = await adminAuth()
+      const res = await request(app)
+        .get('/admin/audit-log?action=invalid_action')
+        .set('Authorization', token)
+      expect(res.status).toBe(422)
+      expect(res.body.error.code).toBe('VALIDATION_ERROR')
+    })
+
+    it('returns recorded events with actor projection, keyset pagination, and filter', async () => {
+      const token = await adminAuth()
+      const target = await seedUser({ email: 'audit-target@example.test', displayName: 'Audit Target' })
+      const jobId = await seedJob({ dedupeKey: 'retry-audit-key', status: 'failed', attempts: 5, lastError: 'Failed' })
+
+      await request(app)
+        .patch(`/admin/users/${target.id}`)
+        .set('Authorization', token)
+        .send({ status: 'disabled' })
+
+      await request(app)
+        .post(`/admin/jobs/${jobId}/retry`)
+        .set('Authorization', token)
+
+      const res = await request(app)
+        .get('/admin/audit-log')
+        .set('Authorization', token)
+      expect(res.status).toBe(200)
+      expect(res.body.events).toHaveLength(2)
+      expect(res.body.events[0]).toMatchObject({
+        action: 'job_retried',
+        targetType: 'job',
+        targetId: jobId,
+      })
+      expect(res.body.events[1]).toMatchObject({
+        action: 'user_status_changed',
+        targetType: 'user',
+        targetId: target.id,
+      })
+      expect(JSON.stringify(res.body)).not.toMatch(/passwordHash|password_hash|tokenHash|payload/)
+
+      const filtered = await request(app)
+        .get('/admin/audit-log?action=job_retried')
+        .set('Authorization', token)
+      expect(filtered.status).toBe(200)
+      expect(filtered.body.events).toHaveLength(1)
+      expect(filtered.body.events[0].action).toBe('job_retried')
+
+      const page1 = await request(app)
+        .get('/admin/audit-log?limit=1')
+        .set('Authorization', token)
+      expect(page1.status).toBe(200)
+      expect(page1.body.events).toHaveLength(1)
+      expect(page1.body.nextCursor).toBeTruthy()
+
+      const page2 = await request(app)
+        .get(`/admin/audit-log?limit=1&cursor=${encodeURIComponent(page1.body.nextCursor)}`)
+        .set('Authorization', token)
+      expect(page2.status).toBe(200)
+      expect(page2.body.events).toHaveLength(1)
+      expect(page2.body.events[0].id).not.toBe(page1.body.events[0].id)
     })
   })
 })

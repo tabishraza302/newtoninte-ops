@@ -47,7 +47,7 @@ export type Action =
   | 'item:read' | 'item:create' | 'item:comment' | 'item:editContent' | 'item:editPriority'
   | 'item:claim' | 'item:assign' | 'item:submit' | 'item:sendBack' | 'item:approve'
   | 'item:close' | 'item:reopen' | 'item:cancel'
-  | 'invitation:manage' | 'membership:manage' | 'job:manage'
+  | 'invitation:manage' | 'membership:manage' | 'membership:role:manage' | 'job:manage'
   | 'user:manage'
 
 export type ItemResource = { kind: 'item'; teamId: number; creatorId: number; assigneeId: number | null }
@@ -74,6 +74,10 @@ export async function can(
       return actor.isAdmin
   }
 
+  if (action === 'membership:role:manage' && actor.isAdmin) {
+    return true
+  }
+
   if (resource === undefined) return false
   const role = await roleIn(actor.id, resource.teamId, executor)
 
@@ -97,6 +101,7 @@ export async function can(
     case 'item:reopen':
     case 'invitation:manage':
     case 'membership:manage':
+    case 'membership:role:manage':
       return role === 'lead'
     // Assignee / creator dependent (§6): a lead may always do these. The
     // assignee/creator clause requires member standing — permission is
