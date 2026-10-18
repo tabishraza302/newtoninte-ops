@@ -1,11 +1,19 @@
 import { and, asc, eq, gt, inArray, isNull, notInArray, sql } from 'drizzle-orm'
 import { aliasedTable } from 'drizzle-orm'
 import { db } from '../db/client'
-import { activityEvents, users, workItems } from '../db/schema'
+import { activityEvents, comments, teams, users, workItems } from '../db/schema'
+import type { CommentRow } from '../db/schema'
+import { withTransaction } from '../db/tx'
 import { buildPage, decodeCursor, DEFAULT_LIMIT, MAX_LIMIT } from '../http/cursor'
 import { ApiError } from '../http/errors'
-import { authorize, membershipsOf, scopeTeamIds } from '../policy'
+import { authorize, membershipsOf, roleIn, scopeTeamIds } from '../policy'
+import { ITEM_TYPES, PRIORITIES } from '../domain/types'
 import type { Actor, ItemType, Priority, Status } from '../domain/types'
+import { recordActivity, recordFieldChanges } from './activity'
+import { enqueue } from './outbox'
+import { emailAssigned } from '../outbox/handlers'
+
+export { emailAssigned }
 
 export type ViewName = 'assigned_to_me' | 'unassigned_urgent' | 'awaiting_my_approval' | 'overdue'
 
@@ -344,4 +352,609 @@ export async function listActivity(
     events: pageResult.page,
     nextCursor: pageResult.nextCursor,
   }
+}
+
+export interface CreateItemInput {
+  teamId: number
+  title: string
+  description?: string | null
+  type: ItemType
+  priority: Priority
+  dueAt?: Date | string | null
+  assigneeId?: number | null
+}
+
+/**
+ * Creates a new work item in the specified team.
+ * Authorizes `item:create` on the team.
+ * If assigneeId is provided, validates that assignee is in the team.
+ * Members may only self-assign; leads may assign any member/lead.
+ * Writes `created` event with initial metadata; writes `assignee_changed` if assigned.
+ * Enqueues `email.assigned` if assigned to another user.
+ */
+export async function createItem(actor: Actor, input: CreateItemInput): Promise<WorkItemRow> {
+  await authorize(actor, 'item:create', { kind: 'team', teamId: input.teamId })
+
+  if (!input.title || typeof input.title !== 'string' || input.title.trim().length === 0 || input.title.length > 200) {
+    throw ApiError.of('VALIDATION_ERROR', 'Title is required and must not exceed 200 characters')
+  }
+
+  if (!ITEM_TYPES.includes(input.type)) {
+    throw ApiError.of('VALIDATION_ERROR', `Invalid item type: ${String(input.type)}`)
+  }
+
+  if (!PRIORITIES.includes(input.priority)) {
+    throw ApiError.of('VALIDATION_ERROR', `Invalid priority: ${String(input.priority)}`)
+  }
+
+  let dueAtDate: Date | null = null
+  if (input.dueAt !== undefined && input.dueAt !== null) {
+    dueAtDate = input.dueAt instanceof Date ? input.dueAt : new Date(input.dueAt)
+    if (Number.isNaN(dueAtDate.getTime())) {
+      throw ApiError.of('VALIDATION_ERROR', 'Invalid dueAt date')
+    }
+  }
+
+  if (input.assigneeId !== undefined && input.assigneeId !== null) {
+    const actorRole = await roleIn(actor.id, input.teamId)
+    if (actorRole === 'member' && input.assigneeId !== actor.id) {
+      throw ApiError.of('FORBIDDEN', 'Members may only assign items to themselves')
+    }
+
+    const assigneeRole = await roleIn(input.assigneeId, input.teamId)
+    if (assigneeRole !== 'member' && assigneeRole !== 'lead') {
+      throw ApiError.of('VALIDATION_ERROR', 'Assignee must be a member or lead of the team')
+    }
+  }
+
+  const insertedId = await withTransaction(async (tx) => {
+    const [result] = await tx.insert(workItems).values({
+      teamId: input.teamId,
+      title: input.title.trim(),
+      description: input.description ?? null,
+      type: input.type,
+      priority: input.priority,
+      status: 'open',
+      assigneeId: input.assigneeId ?? null,
+      createdBy: actor.id,
+      dueAt: dueAtDate,
+      version: 1,
+    })
+
+    const id = Number(result.insertId)
+
+    await recordActivity(tx, {
+      workItemId: id,
+      actorId: actor.id,
+      type: 'created',
+      metadata: {
+        title: input.title.trim(),
+        description: input.description ?? null,
+        type: input.type,
+        priority: input.priority,
+        status: 'open',
+        assigneeId: input.assigneeId ?? null,
+        dueAt: dueAtDate ? dueAtDate.toISOString() : null,
+        createdBy: actor.id,
+      },
+    })
+
+    if (input.assigneeId !== undefined && input.assigneeId !== null) {
+      await recordActivity(tx, {
+        workItemId: id,
+        actorId: actor.id,
+        type: 'assignee_changed',
+        fromValue: null,
+        toValue: String(input.assigneeId),
+      })
+
+      if (input.assigneeId !== actor.id) {
+        const [teamRow] = await tx
+          .select({ name: teams.name })
+          .from(teams)
+          .where(eq(teams.id, input.teamId))
+          .limit(1)
+        const [assigneeUser] = await tx
+          .select({ email: users.email })
+          .from(users)
+          .where(eq(users.id, input.assigneeId))
+          .limit(1)
+
+        if (teamRow && assigneeUser) {
+          await enqueue(tx, {
+            type: 'email.assigned',
+            payload: {
+              to: assigneeUser.email,
+              itemTitle: input.title.trim(),
+              teamName: teamRow.name,
+              itemId: id,
+            },
+            dedupeKey: `assigned:item:${id}`,
+          })
+        }
+      }
+    }
+
+    return id
+  })
+
+  return getItem(actor, insertedId)
+}
+
+const ALLOWED_PATCH_FIELDS: Record<string, true> = {
+  title: true,
+  description: true,
+  type: true,
+  dueAt: true,
+  due_at: true,
+  priority: true,
+  version: true,
+}
+
+export interface PatchItemInput {
+  title?: string
+  description?: string | null
+  type?: ItemType
+  dueAt?: Date | string | null
+  due_at?: Date | string | null
+  priority?: Priority
+  version: number
+  [key: string]: unknown
+}
+
+/**
+ * Partially updates a work item.
+ * Authorizes per present field (`priority` -> `item:editPriority`, others -> `item:editContent`).
+ * Rejects `status` and `assignee` with VALIDATION_ERROR (422).
+ * Enforces optimistic concurrency via CAS on `version`.
+ * On version conflict, throws VERSION_CONFLICT (409) with current item in details.
+ * Records granular field changes.
+ */
+export async function patchItem(actor: Actor, id: number, input: PatchItemInput): Promise<WorkItemRow> {
+  if ('status' in input) {
+    throw ApiError.of('VALIDATION_ERROR', 'status cannot be patched directly; use /transition')
+  }
+  if ('assignee' in input || 'assigneeId' in input || 'assignee_id' in input) {
+    throw ApiError.of('VALIDATION_ERROR', 'assignee cannot be patched directly; use /claim or /assign')
+  }
+
+  for (const key of Object.keys(input)) {
+    if (!ALLOWED_PATCH_FIELDS[key]) {
+      throw ApiError.of('VALIDATION_ERROR', `Unknown field: ${key}`)
+    }
+  }
+
+  if (typeof input.version !== 'number') {
+    throw ApiError.of('VALIDATION_ERROR', 'version must be a number')
+  }
+
+  if ('title' in input && input.title !== undefined) {
+    if (typeof input.title !== 'string' || input.title.trim().length === 0 || input.title.length > 200) {
+      throw ApiError.of('VALIDATION_ERROR', 'Title must be non-empty and at most 200 characters')
+    }
+  }
+
+  if ('type' in input && input.type !== undefined) {
+    if (!ITEM_TYPES.includes(input.type)) {
+      throw ApiError.of('VALIDATION_ERROR', `Invalid item type: ${String(input.type)}`)
+    }
+  }
+
+  if ('priority' in input && input.priority !== undefined) {
+    if (!PRIORITIES.includes(input.priority)) {
+      throw ApiError.of('VALIDATION_ERROR', `Invalid priority: ${String(input.priority)}`)
+    }
+  }
+
+  const [existing] = await db.select().from(workItems).where(eq(workItems.id, id)).limit(1)
+  if (!existing) {
+    throw ApiError.of('NOT_FOUND')
+  }
+
+  const role = await roleIn(actor.id, existing.teamId)
+  if (role === null) {
+    throw ApiError.of('NOT_FOUND')
+  }
+
+  const hasContentField =
+    'title' in input ||
+    'description' in input ||
+    'type' in input ||
+    'dueAt' in input ||
+    'due_at' in input
+
+  if (hasContentField) {
+    await authorize(actor, 'item:editContent', {
+      kind: 'item',
+      teamId: existing.teamId,
+      creatorId: existing.createdBy,
+      assigneeId: existing.assigneeId,
+    })
+  }
+
+  if ('priority' in input) {
+    await authorize(actor, 'item:editPriority', {
+      kind: 'item',
+      teamId: existing.teamId,
+      creatorId: existing.createdBy,
+      assigneeId: existing.assigneeId,
+    })
+  }
+
+  const updateValues: Record<string, unknown> = {
+    version: sql`version + 1`,
+    updatedAt: sql`CURRENT_TIMESTAMP(3)`,
+  }
+
+  const beforeRecord: Record<string, unknown> = {
+    title: existing.title,
+    description: existing.description,
+    type: existing.type,
+    priority: existing.priority,
+    due_at: existing.dueAt,
+  }
+  const afterRecord: Record<string, unknown> = { ...beforeRecord }
+
+  if ('title' in input && input.title !== undefined) {
+    const t = input.title.trim()
+    updateValues.title = t
+    afterRecord.title = t
+  }
+  if ('description' in input) {
+    const d = input.description ?? null
+    updateValues.description = d
+    afterRecord.description = d
+  }
+  if ('type' in input && input.type !== undefined) {
+    updateValues.type = input.type
+    afterRecord.type = input.type
+  }
+  if ('priority' in input && input.priority !== undefined) {
+    updateValues.priority = input.priority
+    afterRecord.priority = input.priority
+  }
+  if ('dueAt' in input || 'due_at' in input) {
+    const raw = 'dueAt' in input ? input.dueAt : input.due_at
+    let d: Date | null = null
+    if (raw !== undefined && raw !== null) {
+      d = raw instanceof Date ? raw : new Date(raw)
+      if (Number.isNaN(d.getTime())) {
+        throw ApiError.of('VALIDATION_ERROR', 'Invalid dueAt date')
+      }
+    }
+    updateValues.dueAt = d
+    afterRecord.due_at = d
+  }
+
+  await withTransaction(async (tx) => {
+    const [result] = await tx
+      .update(workItems)
+      .set(updateValues)
+      .where(and(eq(workItems.id, id), eq(workItems.version, input.version)))
+
+    if (result.affectedRows === 0) {
+      const currentItem = await getItem(actor, id)
+      throw ApiError.of('VERSION_CONFLICT', 'Item version conflict', currentItem)
+    }
+
+    await recordFieldChanges(tx, id, actor.id, beforeRecord, afterRecord)
+  })
+
+  return getItem(actor, id)
+}
+
+/**
+ * Atomically claims an unassigned open work item for the caller.
+ * Authorizes `item:claim` before updating.
+ * Updates status to `in_progress` and assignee_id to caller via CAS.
+ * Throws ALREADY_CLAIMED (409) if 0 rows matched.
+ * Records `assignee_changed` and `status_changed` events.
+ */
+export async function claimItem(actor: Actor, id: number): Promise<WorkItemRow> {
+  const [existing] = await db.select().from(workItems).where(eq(workItems.id, id)).limit(1)
+  if (!existing) {
+    throw ApiError.of('NOT_FOUND')
+  }
+
+  await authorize(actor, 'item:claim', {
+    kind: 'item',
+    teamId: existing.teamId,
+    creatorId: existing.createdBy,
+    assigneeId: existing.assigneeId,
+  })
+
+  await withTransaction(async (tx) => {
+    const [result] = await tx
+      .update(workItems)
+      .set({
+        assigneeId: actor.id,
+        status: 'in_progress',
+        version: sql`version + 1`,
+        updatedAt: sql`CURRENT_TIMESTAMP(3)`,
+      })
+      .where(
+        and(
+          eq(workItems.id, id),
+          eq(workItems.teamId, existing.teamId),
+          eq(workItems.status, 'open'),
+          isNull(workItems.assigneeId),
+        ),
+      )
+
+    if (result.affectedRows === 0) {
+      throw ApiError.of('ALREADY_CLAIMED', 'Item is already claimed or not open')
+    }
+
+    await recordActivity(tx, {
+      workItemId: id,
+      actorId: actor.id,
+      type: 'assignee_changed',
+      fromValue: null,
+      toValue: String(actor.id),
+    })
+
+    await recordActivity(tx, {
+      workItemId: id,
+      actorId: actor.id,
+      type: 'status_changed',
+      fromValue: 'open',
+      toValue: 'in_progress',
+    })
+  })
+
+  return getItem(actor, id)
+}
+
+/**
+ * Assigns a work item to a team member (lead only).
+ * Authorizes `item:assign`.
+ * Validates assignee is a member or lead of the item's team (422).
+ * Performs CAS on version (409 STALE_STATE on failure).
+ * Records `assignee_changed` event.
+ * Enqueues `email.assigned` if assigned to another user.
+ */
+export async function assignItem(
+  actor: Actor,
+  id: number,
+  assigneeId: number,
+  expectedVersion: number,
+): Promise<WorkItemRow> {
+  const [existing] = await db.select().from(workItems).where(eq(workItems.id, id)).limit(1)
+  if (!existing) {
+    throw ApiError.of('NOT_FOUND')
+  }
+
+  await authorize(actor, 'item:assign', {
+    kind: 'item',
+    teamId: existing.teamId,
+    creatorId: existing.createdBy,
+    assigneeId: existing.assigneeId,
+  })
+
+  const assigneeRole = await roleIn(assigneeId, existing.teamId)
+  if (assigneeRole !== 'member' && assigneeRole !== 'lead') {
+    throw ApiError.of('VALIDATION_ERROR', 'Assignee must be a member or lead of the team')
+  }
+
+  await withTransaction(async (tx) => {
+    const [result] = await tx
+      .update(workItems)
+      .set({
+        assigneeId,
+        version: sql`version + 1`,
+        updatedAt: sql`CURRENT_TIMESTAMP(3)`,
+      })
+      .where(and(eq(workItems.id, id), eq(workItems.version, expectedVersion)))
+
+    if (result.affectedRows === 0) {
+      throw ApiError.of('STALE_STATE', 'Item version conflict or stale state')
+    }
+
+    await recordActivity(tx, {
+      workItemId: id,
+      actorId: actor.id,
+      type: 'assignee_changed',
+      fromValue: existing.assigneeId !== null ? String(existing.assigneeId) : null,
+      toValue: String(assigneeId),
+    })
+
+    if (assigneeId !== actor.id) {
+      const [teamRow] = await tx
+        .select({ name: teams.name })
+        .from(teams)
+        .where(eq(teams.id, existing.teamId))
+        .limit(1)
+      const [assigneeUser] = await tx
+        .select({ email: users.email })
+        .from(users)
+        .where(eq(users.id, assigneeId))
+        .limit(1)
+
+      if (teamRow && assigneeUser) {
+        await enqueue(tx, {
+          type: 'email.assigned',
+          payload: {
+            to: assigneeUser.email,
+            itemTitle: existing.title,
+            teamName: teamRow.name,
+            itemId: id,
+          },
+          dedupeKey: `assigned:item:${id}`,
+        })
+      }
+    }
+  })
+
+  return getItem(actor, id)
+}
+
+type TransitionAction =
+  | 'item:submit'
+  | 'item:sendBack'
+  | 'item:approve'
+  | 'item:close'
+  | 'item:reopen'
+  | 'item:cancel'
+
+interface TransitionConfig {
+  action?: TransitionAction
+  isStart?: boolean
+}
+
+const LEGAL_TRANSITIONS: Record<Status, Partial<Record<Status, TransitionConfig>>> = {
+  open: {
+    in_progress: { isStart: true },
+    cancelled: { action: 'item:cancel' },
+  },
+  in_progress: {
+    awaiting_approval: { action: 'item:submit' },
+    cancelled: { action: 'item:cancel' },
+  },
+  awaiting_approval: {
+    resolved: { action: 'item:approve' },
+    in_progress: { action: 'item:sendBack' },
+    cancelled: { action: 'item:cancel' },
+  },
+  resolved: {
+    closed: { action: 'item:close' },
+    in_progress: { action: 'item:reopen' },
+  },
+  closed: {},
+  cancelled: {},
+}
+
+/**
+ * Transitions a work item to a new status according to the state machine (§6).
+ * Validates transition legality (422 INVALID_TRANSITION).
+ * Authorizes caller per transition rules.
+ * Enforces atomic CAS on `status` (409 STALE_STATE).
+ * Records `status_changed` event.
+ * If `reason` is present, records a comment and a `comment_added` event.
+ */
+export async function transitionItem(
+  actor: Actor,
+  id: number,
+  to: Status,
+  reason?: string,
+): Promise<WorkItemRow> {
+  const [existing] = await db.select().from(workItems).where(eq(workItems.id, id)).limit(1)
+  if (!existing) {
+    throw ApiError.of('NOT_FOUND')
+  }
+
+  const role = await roleIn(actor.id, existing.teamId)
+  if (role === null) {
+    throw ApiError.of('NOT_FOUND')
+  }
+
+  const allowedForCurrent = LEGAL_TRANSITIONS[existing.status]
+  const config = allowedForCurrent?.[to]
+  if (!config) {
+    throw ApiError.of('INVALID_TRANSITION', `Cannot transition from ${existing.status} to ${to}`)
+  }
+
+  if (config.isStart) {
+    if (existing.assigneeId === null) {
+      throw ApiError.of('INVALID_TRANSITION', 'Unassigned items must be claimed, not transitioned')
+    }
+    if (role !== 'lead' && (role !== 'member' || actor.id !== existing.assigneeId)) {
+      throw ApiError.of('FORBIDDEN', 'Only the assignee or a lead may start this item')
+    }
+  } else if (config.action) {
+    await authorize(actor, config.action, {
+      kind: 'item',
+      teamId: existing.teamId,
+      creatorId: existing.createdBy,
+      assigneeId: existing.assigneeId,
+    })
+  }
+
+  await withTransaction(async (tx) => {
+    const [result] = await tx
+      .update(workItems)
+      .set({
+        status: to,
+        version: sql`version + 1`,
+        updatedAt: sql`CURRENT_TIMESTAMP(3)`,
+      })
+      .where(and(eq(workItems.id, id), eq(workItems.status, existing.status)))
+
+    if (result.affectedRows === 0) {
+      throw ApiError.of('STALE_STATE', 'Item status has changed')
+    }
+
+    await recordActivity(tx, {
+      workItemId: id,
+      actorId: actor.id,
+      type: 'status_changed',
+      fromValue: existing.status,
+      toValue: to,
+    })
+
+    const trimmedReason = reason?.trim()
+    if (trimmedReason && trimmedReason.length > 0) {
+      await tx.insert(comments).values({
+        workItemId: id,
+        authorId: actor.id,
+        body: trimmedReason,
+      })
+
+      await recordActivity(tx, {
+        workItemId: id,
+        actorId: actor.id,
+        type: 'comment_added',
+        metadata: { body: trimmedReason },
+      })
+    }
+  })
+
+  return getItem(actor, id)
+}
+
+/**
+ * Appends an immutable comment to a work item.
+ * Authorizes `item:comment`.
+ * Validates body length between 1 and 10,000 characters (422).
+ * Inserts comment row and records `comment_added` event in the same transaction.
+ */
+export async function addComment(actor: Actor, id: number, body: string): Promise<CommentRow> {
+  const [existing] = await db.select().from(workItems).where(eq(workItems.id, id)).limit(1)
+  if (!existing) {
+    throw ApiError.of('NOT_FOUND')
+  }
+
+  await authorize(actor, 'item:comment', {
+    kind: 'item',
+    teamId: existing.teamId,
+    creatorId: existing.createdBy,
+    assigneeId: existing.assigneeId,
+  })
+
+  if (typeof body !== 'string' || body.trim().length === 0 || body.length > 10000) {
+    throw ApiError.of('VALIDATION_ERROR', 'Comment body must be between 1 and 10000 characters')
+  }
+
+  const comment = await withTransaction(async (tx) => {
+    const [result] = await tx.insert(comments).values({
+      workItemId: id,
+      authorId: actor.id,
+      body: body,
+    })
+    const commentId = Number(result.insertId)
+
+    await recordActivity(tx, {
+      workItemId: id,
+      actorId: actor.id,
+      type: 'comment_added',
+      metadata: { body: body },
+    })
+
+    const [row] = await tx.select().from(comments).where(eq(comments.id, commentId)).limit(1)
+    if (!row) {
+      throw ApiError.of('INTERNAL_ERROR', 'Failed to read created comment')
+    }
+    return row
+  })
+
+  return comment
 }

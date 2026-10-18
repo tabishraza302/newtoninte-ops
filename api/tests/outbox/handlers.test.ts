@@ -4,7 +4,7 @@ import { closeDb, pool } from '../../src/db/client'
 import { withTransaction } from '../../src/db/tx'
 import { enqueue } from '../../src/services/outbox'
 import { runOnce } from '../../src/outbox/worker'
-import { emailInvite, handlers } from '../../src/outbox/handlers'
+import { emailAssigned, emailInvite, handlers } from '../../src/outbox/handlers'
 
 const MAILPIT_API = 'http://localhost:8025/api/v1/messages'
 
@@ -124,7 +124,40 @@ describe('email handlers', () => {
     )
   })
 
-  it('email.assigned handler throws not implemented stub (to be replaced in Task 4.3)', async () => {
-    await expect(handlers['email.assigned']({})).rejects.toThrow('not implemented')
+  it('emailAssigned delivers email to Mailpit with item title, team name, and item link', async () => {
+    const to = 'assignee@example.test'
+    const teamName = 'Mission Control'
+    const itemTitle = 'Engine pressure sensor spike'
+    const itemId = 101
+
+    await emailAssigned({ to, teamName, itemTitle, itemId })
+
+    const foundMessage = await vi.waitFor(
+      async () => {
+        const res = await fetch(MAILPIT_API)
+        const list = (await res.json()) as MailpitList
+        const msg = list.messages.find(
+          (m) => m.To.some((recipient) => recipient.Address === to),
+        )
+        expect(msg).toBeDefined()
+        return msg!
+      },
+      { timeout: 5000, interval: 50 },
+    )
+
+    expect(foundMessage.Subject).toContain(itemTitle)
+
+    const detailRes = await fetch(`http://localhost:8025/api/v1/message/${foundMessage.ID}`)
+    const detail = (await detailRes.json()) as MailpitMessageDetail
+
+    expect(detail.Text).toContain(itemTitle)
+    expect(detail.Text).toContain(teamName)
+    expect(detail.Text).toContain(`/items/${itemId}`)
+    expect(detail.HTML).toContain(itemTitle)
+    expect(detail.HTML).toContain(teamName)
+  })
+
+  it('email.assigned handler rejects invalid payload', async () => {
+    await expect(handlers['email.assigned']({})).rejects.toThrow('Invalid email.assigned payload')
   })
 })
