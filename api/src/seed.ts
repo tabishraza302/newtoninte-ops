@@ -1,4 +1,3 @@
-import { scryptSync } from 'node:crypto'
 import { inArray, sql } from 'drizzle-orm'
 import { closeDb, db } from './db/client'
 import { memberships, teams, users, workItems } from './db/schema'
@@ -22,23 +21,8 @@ const TARGET_ITEMS = 5000
 /** Rows per INSERT statement — large enough to be quick, small enough for max_allowed_packet. */
 const INSERT_CHUNK_SIZE = 500
 
-/** Shared demo password. */
+/** Shared demo password, hashed with argon2id via Bun.password. */
 const DEMO_PASSWORD = 'Passw0rd!'
-
-/** Fixed salt so the Node fallback stays deterministic across runs. */
-const DEMO_PASSWORD_SALT = 'newtonite-demo-seed'
-
-/**
- * Hashes the shared demo password. Under Bun (i.e. `bun run seed`) this is
- * Bun.password.hash with argon2id, as required. Vitest runs its workers under
- * Node, where the Bun global does not exist, so there is a scrypt fallback
- * with a fixed salt to keep the seed runnable (and deterministic) there.
- */
-async function hashDemoPassword(): Promise<string> {
-  const bun = (globalThis as { Bun?: typeof Bun }).Bun
-  if (bun !== undefined) return bun.password.hash(DEMO_PASSWORD, { algorithm: 'argon2id' })
-  return `scrypt$${DEMO_PASSWORD_SALT}$${scryptSync(DEMO_PASSWORD, DEMO_PASSWORD_SALT, 64).toString('hex')}`
-}
 
 const DEMO_TEAMS = [
   { name: 'Operations', slug: 'ops' },
@@ -129,7 +113,7 @@ function buildItemRows(startIndex: number, count: number, demoTeams: TeamRow[], 
  * second call inserts nothing and the reported item count stays put.
  */
 export async function runSeed(db: Db): Promise<SeedCounts> {
-  const passwordHash = await hashDemoPassword()
+  const passwordHash = await Bun.password.hash(DEMO_PASSWORD, { algorithm: 'argon2id' })
   await db.insert(teams).values(DEMO_TEAMS).onDuplicateKeyUpdate({ set: { id: sql`id` } })
   await db
     .insert(users)
