@@ -49,10 +49,52 @@ services:
     environment:
       # Invite / password-reset links must point at the web origin, not :5173.
       APP_BASE_URL: http://localhost:8080
+      # The two endpoints on the compose network are pinned here because a
+      # `.env` written for host-run dev (`127.0.0.1`) is unreachable from inside
+      # a container — the same file is shared by both paths. A reader who wants
+      # the `resend` driver edits this service, not `.env`.
+      DATABASE_URL: mysql://root:root@mysql:3306/newtonite
+      SMTP_URL: smtp://mailpit:1025
+      MAIL_DRIVER: mailpit
     ports:
       - "3000:3000"
+    # Both other services wait on this, so "healthy" also means the migrations
+    # and the seed have already run. Exec form: no shell, so no quoting layer.
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bun",
+          "-e",
+          "fetch('http://127.0.0.1:3000/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 30s
     depends_on:
       mysql:
+        condition: service_healthy
+
+  # Drains `outbox_jobs`. Without it every invitation, password-reset and
+  # assignment email sits `pending` forever, which is exactly what the ops
+  # screen would (correctly) report. Same image as `api`, different entry point.
+  worker:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    command: ["sh", "-c", "bun run worker"]
+    env_file:
+      - .env
+    environment:
+      # Same reason as `api`: the compose network is not the host's loopback.
+      DATABASE_URL: mysql://root:root@mysql:3306/newtonite
+      SMTP_URL: smtp://mailpit:1025
+      MAIL_DRIVER: mailpit
+    depends_on:
+      mysql:
+        condition: service_healthy
+      api:
         condition: service_healthy
 
   web:
@@ -62,7 +104,10 @@ services:
     ports:
       - "8080:80"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+      worker:
+        condition: service_started
 
 volumes:
   mysql_data:

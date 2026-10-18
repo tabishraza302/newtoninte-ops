@@ -3,7 +3,7 @@
   "private": true,
   "workspaces": ["api", "web"],
   "scripts": {
-    "dev": "concurrently -n api,web -c blue,magenta \"bun --cwd api dev\" \"bun --cwd web dev\"",
+    "dev": "concurrently -n api,web,worker -c blue,magenta,cyan \"bun --cwd api dev\" \"bun --cwd web dev\" \"bun --cwd api worker\"",
     "test": "bun --cwd api test && bun --cwd web test",
     "typecheck": "bun --cwd api typecheck && bun --cwd web typecheck",
     "db:migrate": "bun --cwd api db:migrate",
