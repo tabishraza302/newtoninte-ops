@@ -1,6 +1,6 @@
 import { config } from '../config'
 import { sendMail } from './mailer'
-import { inviteEmail } from './templates'
+import { inviteEmail, resetEmail } from './templates'
 import type { JobHandler } from './worker'
 import type { OutboxJobType } from '../domain/types'
 
@@ -43,6 +43,38 @@ export async function emailInvite(p: EmailInviteParams): Promise<void> {
   const { subject, text, html } = inviteEmail({ teamName: p.teamName, link })
   await sendMail({ to: p.to, subject, text, html })
 }
+export interface EmailResetParams {
+  to: string
+  code: string
+}
+
+function parseEmailResetParams(payload: unknown): EmailResetParams {
+  if (
+    typeof payload === 'object' &&
+    payload !== null &&
+    'to' in payload &&
+    'code' in payload
+  ) {
+    const candidate = payload as Record<string, unknown>
+    if (typeof candidate.to === 'string' && typeof candidate.code === 'string') {
+      return {
+        to: candidate.to,
+        code: candidate.code,
+      }
+    }
+  }
+  throw new Error('Invalid email.reset payload: expected { to, code }')
+}
+
+/**
+ * Builds the password reset link `${config.appBaseUrl}/reset-password?token=${code}`
+ * and sends the reset email via Nodemailer.
+ */
+export async function emailReset(p: EmailResetParams): Promise<void> {
+  const link = `${config.appBaseUrl}/reset-password?token=${encodeURIComponent(p.code)}`
+  const { subject, text, html } = resetEmail({ link })
+  await sendMail({ to: p.to, subject, text, html })
+}
 
 /**
  * Registry of handlers for outbox jobs.
@@ -53,9 +85,9 @@ export const handlers: Record<OutboxJobType, JobHandler> = {
     const params = parseEmailInviteParams(payload)
     await emailInvite(params)
   },
-  'email.reset': async () => {
-    // TODO(task 2.14): password reset email handler
-    throw new Error('email.reset handler not implemented')
+  'email.reset': async (payload: unknown) => {
+    const params = parseEmailResetParams(payload)
+    await emailReset(params)
   },
   'email.assigned': async () => {
     // TODO(task 4.3): work item assigned notification handler

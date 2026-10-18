@@ -124,8 +124,7 @@ describe('email handlers', () => {
     )
   })
 
-  it('email.reset and email.assigned handlers throw not implemented stubs (to be replaced in 2.14 / 4.3)', async () => {
-    await expect(handlers['email.reset']({})).rejects.toThrow('not implemented')
+  it('email.assigned handler throws not implemented stub (to be replaced in Task 4.3)', async () => {
     await expect(handlers['email.assigned']({})).rejects.toThrow('not implemented')
   })
 })
