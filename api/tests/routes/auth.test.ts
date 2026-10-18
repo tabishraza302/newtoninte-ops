@@ -6,6 +6,7 @@ import { outboxJobs } from '../../src/db/schema'
 import { hashPassword } from '../../src/services/crypto'
 import { signAccessToken } from '../../src/services/tokens'
 import { resetDb, seedMembership, seedTeam, seedUser } from '../helpers/db'
+import { expectPublicUser } from '../helpers/publicUser'
 
 describe('auth routes', () => {
   beforeEach(resetDb)
@@ -25,6 +26,7 @@ describe('auth routes', () => {
       expect(res.status).toBe(200)
       expect(res.body.user.id).toBe(user.id)
       expect(res.body.user.email).toBe('login-test@example.com')
+      expectPublicUser(res.body.user)
       expect(typeof res.body.accessToken).toBe('string')
       expect(res.body.accessToken.length).toBeGreaterThan(0)
 
@@ -61,6 +63,7 @@ describe('auth routes', () => {
       expect(refreshRes.status).toBe(200)
       expect(typeof refreshRes.body.accessToken).toBe('string')
       expect(refreshRes.body.user.email).toBe('refresh-test@example.com')
+      expectPublicUser(refreshRes.body.user)
 
       const nextCookies = refreshRes.headers['set-cookie']
       expect(nextCookies).toBeDefined()
@@ -193,6 +196,7 @@ describe('auth routes', () => {
       expect(res.status).toBe(200)
       expect(res.body.user.id).toBe(user.id)
       expect(res.body.user.email).toBe('me-route@example.com')
+      expectPublicUser(res.body.user)
       expect(res.body.memberships).toEqual([
         { teamId: team.id, role: 'lead' },
       ])

@@ -1,7 +1,7 @@
 import { and, asc, eq, gt, isNull, sql } from 'drizzle-orm'
 import { config } from '../config'
 import { db } from '../db/client'
-import { invitations, memberships, membershipEvents, teams, users } from '../db/schema'
+import { invitations, memberships, membershipEvents, teams, users, type UserRow } from '../db/schema'
 import { withTransaction } from '../db/tx'
 import { ApiError } from '../http/errors'
 import { buildPage, decodeCursor, DEFAULT_LIMIT, MAX_LIMIT } from '../http/cursor'
@@ -10,6 +10,7 @@ import { hashPassword, randomToken, sha256, verifyPassword } from './crypto'
 import { enqueue } from './outbox'
 import { issueFamily } from './sessions'
 import { signAccessToken } from './tokens'
+import { toPublicUser, type PublicUser } from './users'
 import type { Actor, Role } from '../domain/types'
 
 export interface InvitationView {
@@ -182,10 +183,8 @@ export interface RedeemInput {
   displayName?: string | undefined
 }
 
-export type UserRow = typeof users.$inferSelect
-
 export interface RedeemResult {
-  user: UserRow
+  user: PublicUser
   teamId: number
   role: Role
   accessToken: string
@@ -356,7 +355,7 @@ export async function redeem(
     const session = await issueFamily(user.id, {}, tx)
 
     return {
-      user,
+      user: toPublicUser(user),
       teamId: invitation.teamId,
       role: invitation.role,
       accessToken,

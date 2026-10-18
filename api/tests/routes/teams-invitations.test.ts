@@ -3,6 +3,7 @@ import request from 'supertest'
 import { createApp } from '../../src/app'
 import { closeDb, pool } from '../../src/db/client'
 import { resetDb, seedMembership, seedTeam, seedUser } from '../helpers/db'
+import { expectPublicUser } from '../helpers/publicUser'
 import { createInvitation } from '../../src/services/invitations'
 import { signAccessToken } from '../../src/services/tokens'
 import type { Actor } from '../../src/domain/types'
@@ -50,6 +51,7 @@ describe('Teams and Invitations routes (Task 2.17)', () => {
     expect(res1.body.teamId).toBe(team.id)
     expect(res1.body.role).toBe('member')
     expect(res1.body.user.email).toBe('newbie@example.test')
+    expectPublicUser(res1.body.user)
     expect(res1.body.accessToken).toBeTypeOf('string')
 
     // Verify refresh cookie set

@@ -1,33 +1,35 @@
 import { eq } from 'drizzle-orm'
 import { db } from '../db/client'
-import { refreshTokens, users, type UserRow } from '../db/schema'
+import { refreshTokens, users } from '../db/schema'
 import type { Actor, Role } from '../domain/types'
 import { ApiError } from '../http/errors'
 import { membershipsOf } from '../policy'
 import { sha256, verifyPassword } from './crypto'
 import { issueFamily, revokeFamily, type SessionCtx } from './sessions'
 import { signAccessToken } from './tokens'
+import { publicUserColumns, toPublicUser, type PublicUser } from './users'
 
 export async function login(
   email: string,
   password: string,
   ctx: SessionCtx = {},
-): Promise<{ user: UserRow; accessToken: string; refreshToken: string }> {
+): Promise<{ user: PublicUser; accessToken: string; refreshToken: string }> {
   const normalizedEmail = email.toLowerCase().trim()
-  const [user] = await db
-    .select()
+  const [row] = await db
+    .select({ ...publicUserColumns, passwordHash: users.passwordHash })
     .from(users)
     .where(eq(users.email, normalizedEmail))
     .limit(1)
 
-  if (!user || !(await verifyPassword(password, user.passwordHash))) {
+  if (!row || !(await verifyPassword(password, row.passwordHash))) {
     throw ApiError.of('UNAUTHENTICATED')
   }
 
-  if (user.status === 'disabled') {
+  if (row.status === 'disabled') {
     throw ApiError.of('FORBIDDEN')
   }
 
+  const user = toPublicUser(row)
   const accessToken = await signAccessToken(user.id)
   const { refreshToken } = await issueFamily(user.id, ctx)
 
@@ -55,9 +57,9 @@ export async function logout(presentedToken: string | undefined): Promise<void> 
 
 export async function me(
   actor: Actor,
-): Promise<{ user: UserRow; memberships: Array<{ teamId: number; role: Role }> }> {
+): Promise<{ user: PublicUser; memberships: Array<{ teamId: number; role: Role }> }> {
   const [user] = await db
-    .select()
+    .select(publicUserColumns)
     .from(users)
     .where(eq(users.id, actor.id))
     .limit(1)

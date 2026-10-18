@@ -12,6 +12,7 @@ import { login, logout, me } from '../../services/auth'
 import { rotate } from '../../services/sessions'
 import { signAccessToken } from '../../services/tokens'
 import { forgotPassword, resetPassword } from '../../services/passwordReset'
+import { publicUserColumns } from '../../services/users'
 
 export const authRouter: Router = Router()
 
@@ -62,7 +63,7 @@ authRouter.post('/auth/refresh', async (req: Request, res: Response) => {
   const accessToken = await signAccessToken(rotated.userId)
 
   const [user] = await db
-    .select()
+    .select(publicUserColumns)
     .from(users)
     .where(eq(users.id, rotated.userId))
     .limit(1)
