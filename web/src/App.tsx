@@ -1,24 +1,26 @@
-import React from 'react'
+import React, { lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AuthProvider, useAuth } from './auth/AuthContext'
 import { AppLayout } from './components/AppLayout'
-import { Login } from './pages/Login'
-import { ForgotPassword } from './pages/ForgotPassword'
-import { ResetPassword } from './pages/ResetPassword'
-import { Redeem } from './pages/Redeem'
-import { Dashboard } from './pages/Dashboard'
-import { ItemList } from './pages/ItemList'
-import { ItemDetail } from './pages/ItemDetail'
-import { ItemCreate } from './pages/ItemCreate'
-import { Team } from './pages/Team'
-import { OutboxJobs } from './pages/OutboxJobs'
-import { AdminUsers } from './pages/AdminUsers'
-import { AdminTeams } from './pages/AdminTeams'
-import { AdminAuditLog } from './pages/AdminAuditLog'
-import { Notifications } from './pages/Notifications'
 import { NotificationLiveProvider } from './components/NotificationLiveProvider'
-import { Approvals } from './pages/Approvals'
+
+const Login = lazy(() => import('./pages/Login').then((m) => ({ default: m.Login })))
+const ForgotPassword = lazy(() => import('./pages/ForgotPassword').then((m) => ({ default: m.ForgotPassword })))
+const ResetPassword = lazy(() => import('./pages/ResetPassword').then((m) => ({ default: m.ResetPassword })))
+const Redeem = lazy(() => import('./pages/Redeem').then((m) => ({ default: m.Redeem })))
+const Dashboard = lazy(() => import('./pages/Dashboard').then((m) => ({ default: m.Dashboard })))
+const ItemList = lazy(() => import('./pages/ItemList').then((m) => ({ default: m.ItemList })))
+const ItemDetail = lazy(() => import('./pages/ItemDetail').then((m) => ({ default: m.ItemDetail })))
+const ItemCreate = lazy(() => import('./pages/ItemCreate').then((m) => ({ default: m.ItemCreate })))
+const Team = lazy(() => import('./pages/Team').then((m) => ({ default: m.Team })))
+const OutboxJobs = lazy(() => import('./pages/OutboxJobs').then((m) => ({ default: m.OutboxJobs })))
+const AdminUsers = lazy(() => import('./pages/AdminUsers').then((m) => ({ default: m.AdminUsers })))
+const AdminTeams = lazy(() => import('./pages/AdminTeams').then((m) => ({ default: m.AdminTeams })))
+const AdminAuditLog = lazy(() => import('./pages/AdminAuditLog').then((m) => ({ default: m.AdminAuditLog })))
+const Notifications = lazy(() => import('./pages/Notifications').then((m) => ({ default: m.Notifications })))
+const Approvals = lazy(() => import('./pages/Approvals').then((m) => ({ default: m.Approvals })))
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -68,141 +70,143 @@ export function DashboardOrHome(): React.ReactElement {
 
 export function AppRoutes(): React.ReactElement {
   return (
-    <Routes>
-      <Route path="/login" element={<Login />} />
-      <Route path="/forgot-password" element={<ForgotPassword />} />
-      <Route path="/reset-password" element={<ResetPassword />} />
-      <Route path="/redeem" element={<Redeem />} />
-      <Route
-        path="/dashboard"
-        element={
-          <RequireAuth>
-            <AppLayout>
-              <Dashboard />
-            </AppLayout>
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/approvals"
-        element={
-          <RequireAuth>
-            <AppLayout>
-              <Approvals />
-            </AppLayout>
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/items"
-        element={
-          <RequireAuth>
-            <AppLayout>
-              <ItemList />
-            </AppLayout>
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/items/new"
-        element={
-          <RequireAuth>
-            <AppLayout>
-              <ItemCreate />
-            </AppLayout>
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/items/:id"
-        element={
-          <RequireAuth>
-            <AppLayout>
-              <ItemDetail />
-            </AppLayout>
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/teams"
-        element={
-          <RequireAuth>
-            <AppLayout>
-              <Team />
-            </AppLayout>
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/teams/:id"
-        element={
-          <RequireAuth>
-            <AppLayout>
-              <Team />
-            </AppLayout>
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/notifications"
-        element={
-          <RequireAuth>
-            <AppLayout>
-              <Notifications />
-            </AppLayout>
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/admin/jobs"
-        element={
-          <RequireAuth>
-            <AppLayout>
-              <OutboxJobs />
-            </AppLayout>
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/admin/users"
-        element={
-          <RequireAuth>
-            <AppLayout>
-              <AdminUsers />
-            </AppLayout>
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/admin/teams"
-        element={
-          <RequireAuth>
-            <AppLayout>
-              <AdminTeams />
-            </AppLayout>
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/admin/audit-log"
-        element={
-          <RequireAuth>
-            <AppLayout>
-              <AdminAuditLog />
-            </AppLayout>
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/"
-        element={
-          <RequireAuth>
-            <DashboardOrHome />
-          </RequireAuth>
-        }
-      />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    <Suspense fallback={<div role="status">Loading page…</div>}>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
+        <Route path="/redeem" element={<Redeem />} />
+        <Route
+          path="/dashboard"
+          element={
+            <RequireAuth>
+              <AppLayout>
+                <Dashboard />
+              </AppLayout>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/approvals"
+          element={
+            <RequireAuth>
+              <AppLayout>
+                <Approvals />
+              </AppLayout>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/items"
+          element={
+            <RequireAuth>
+              <AppLayout>
+                <ItemList />
+              </AppLayout>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/items/new"
+          element={
+            <RequireAuth>
+              <AppLayout>
+                <ItemCreate />
+              </AppLayout>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/items/:id"
+          element={
+            <RequireAuth>
+              <AppLayout>
+                <ItemDetail />
+              </AppLayout>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/teams"
+          element={
+            <RequireAuth>
+              <AppLayout>
+                <Team />
+              </AppLayout>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/teams/:id"
+          element={
+            <RequireAuth>
+              <AppLayout>
+                <Team />
+              </AppLayout>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/notifications"
+          element={
+            <RequireAuth>
+              <AppLayout>
+                <Notifications />
+              </AppLayout>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/admin/jobs"
+          element={
+            <RequireAuth>
+              <AppLayout>
+                <OutboxJobs />
+              </AppLayout>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/admin/users"
+          element={
+            <RequireAuth>
+              <AppLayout>
+                <AdminUsers />
+              </AppLayout>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/admin/teams"
+          element={
+            <RequireAuth>
+              <AppLayout>
+                <AdminTeams />
+              </AppLayout>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/admin/audit-log"
+          element={
+            <RequireAuth>
+              <AppLayout>
+                <AdminAuditLog />
+              </AppLayout>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/"
+          element={
+            <RequireAuth>
+              <DashboardOrHome />
+            </RequireAuth>
+          }
+        />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </Suspense>
   )
 }
 

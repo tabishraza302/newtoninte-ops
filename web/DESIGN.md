@@ -167,6 +167,7 @@ The spatial model enforces strict desktop density and accessible mobile responsi
 - **Content Max-Width:** Primary workspace queues and administrative lists expand within `max-width: 1200px` with `2rem 1.5rem` outer padding; focused single-column forms (item creation, account settings) constrain to `max-width: 800px`.
 - **Responsive Breakpoints:** The application source codebase defines responsive behaviors around explicit media queries (`max-width: 768px` for mobile navigation drawer collapse and single-column grid fallback; `max-width: 600px` for dense admin form grids).
 - **Mobile Collapse:** Below 768px, the sidebar collapses into a modal drawer off-canvas, toggled via an accessible mobile menu button with trapped keyboard focus and Escape dismissal. Data tables scroll locally within regional containers rather than causing document-level horizontal overflow.
+- **Route Loading:** Page modules load on demand through `React.lazy` in `App.tsx`; shared authentication, query, and notification providers remain eager. A route-level Suspense boundary exposes a `role="status"` “Loading page…” fallback while a page chunk downloads. Keep new pages behind dynamic imports rather than adding them to the initial bundle.
 
 ## Elevation & Depth
 
