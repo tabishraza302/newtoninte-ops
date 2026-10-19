@@ -113,6 +113,7 @@ function handleResize(): void {
 
 const originalMatchMedia = typeof window !== 'undefined' ? window.matchMedia : undefined
 const originalResizeTo = typeof window !== 'undefined' ? window.resizeTo : undefined
+const originalScrollTo = typeof window !== 'undefined' ? window.scrollTo : undefined
 
 if (typeof window !== 'undefined') {
   if (typeof window.innerWidth !== 'number' || window.innerWidth === 0) {
@@ -139,6 +140,9 @@ if (typeof window !== 'undefined') {
     })
     window.dispatchEvent(new Event('resize'))
   }
+
+  // jsdom emits a "Not implemented" console error for scrollTo; the teams drill-down scrolls to top on open.
+  window.scrollTo = function scrollTo(): void {}
 }
 
 afterEach(() => {
@@ -162,6 +166,11 @@ afterAll(() => {
       window.resizeTo = originalResizeTo
     } else {
       Reflect.deleteProperty(window, 'resizeTo')
+    }
+    if (originalScrollTo !== undefined) {
+      window.scrollTo = originalScrollTo
+    } else {
+      Reflect.deleteProperty(window, 'scrollTo')
     }
   }
 })

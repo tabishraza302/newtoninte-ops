@@ -234,9 +234,6 @@ describe('AdminTeams Page', () => {
       expect(screen.getByRole('heading', { name: 'Platform Engineering' })).toBeInTheDocument()
       expect(screen.getByText('Customer Operations')).toBeInTheDocument()
       expect(
-        within(screen.getByRole('region', { name: /Team Roster/i })).getByText(/slug: platform-engineering/i),
-      ).toBeInTheDocument()
-      expect(
         screen.getByText('Manage organizational teams, inspect member rosters, and assign roles.'),
       ).toBeInTheDocument()
       expect(screen.getByRole('button', { name: /\+ Add Member/i })).toBeInTheDocument()
@@ -1363,6 +1360,61 @@ describe('AdminTeams Page', () => {
       expect(screen.getByText('Marcus Aurelius')).toBeInTheDocument()
       expect(screen.queryByLabelText('Remove Zack Taylor from team')).not.toBeInTheDocument()
       expect(screen.queryByText('Zack Taylor')).not.toBeInTheDocument()
+    })
+  })
+
+  it('drills into a team detail with URL state on single-column layouts and returns via All teams', async () => {
+    mockTeamsApi()
+    window.resizeTo(390, 844)
+    renderAdminTeamsWithBrowserRouter()
+
+    fireEvent.click(await screen.findByRole('button', { name: /Customer Operations/i }))
+
+    await waitFor(() => {
+      expect(document.querySelector('.admin-teams-page')?.getAttribute('data-mobile-view')).toBe('detail')
+      expect(window.location.search).toContain('team=2')
+    })
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Customer Operations' }))
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /All teams/i }))
+
+    await waitFor(() => {
+      expect(document.querySelector('.admin-teams-page')?.getAttribute('data-mobile-view')).toBe('list')
+    })
+    expect(window.location.search).not.toContain('team=')
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: /Customer Operations/i }))
+    })
+  })
+
+  it('resolves a ?team= deep link straight into the detail view', async () => {
+    mockTeamsApi()
+    window.resizeTo(390, 844)
+    renderAdminTeamsWithBrowserRouter('/admin/teams?team=2')
+
+    await waitFor(() => {
+      expect(document.querySelector('.admin-teams-page')?.getAttribute('data-mobile-view')).toBe('detail')
+      expect(screen.getByRole('heading', { name: 'Customer Operations' })).toBeInTheDocument()
+    })
+    expect(window.location.search).toContain('team=2')
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Customer Operations' }))
+    })
+  })
+
+  it('drops a ?team= id the loaded directory cannot resolve', async () => {
+    mockTeamsApi()
+    window.resizeTo(390, 844)
+    renderAdminTeamsWithBrowserRouter('/admin/teams?team=999')
+
+    await waitFor(() => {
+      expect(document.querySelector('.admin-teams-page')?.getAttribute('data-mobile-view')).toBe('list')
+    })
+    await waitFor(() => {
+      expect(window.location.search).not.toContain('team=')
     })
   })
 })

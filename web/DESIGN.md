@@ -209,7 +209,8 @@ Surfaces rely on structural 1px borders and tonal layering.
 - **Typography:** Monospace item ID (`ui-monospace`), tabular due date alignment.
 
 ### Administrative Teams
-- **Selection Above Roster:** A searchable, paginated team picker sits above one full-width members panel, rather than a permanent directory column beside the roster.
+- **Selection Above Roster:** A searchable, paginated team picker sits above one full-width members panel, rather than a permanent directory column beside the roster. On single-column layouts (viewport ≤1024px) selecting a team replaces the directory with a URL-backed drill-down — list ↔ detail, an "All teams" back control, and shareable `?team=<id>` links — and the roster renders member rows as cards whenever its own column is narrower than 640px. Cards keep the identity left and the role/removal controls stacked on the right; on phone-width cards the identity takes the full width and the two controls pair up beneath it.
+- **Detail Navigation:** On single-column layouts, the unboxed "All teams" back control sits above and outside the roster card. It is hidden in directory view and on two-pane desktop layouts.
 - **Compact Membership Rows:** Keep member name and email together, with role controls and removal actions in the same row. On narrow screens, constrain long team names and slugs to the picker width and keep any table overflow local.
 - **Stable Search and Selection:** Search inputs preserve typed whitespace while results use trimmed search terms. Equivalent searches retain loaded results; closing the user-provisioning form restores the initial team-picker page on reopening.
 
