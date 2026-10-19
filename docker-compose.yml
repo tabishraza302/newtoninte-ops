@@ -30,7 +30,7 @@ services:
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      test: ["CMD", "mysql", "--protocol=TCP", "-h", "127.0.0.1", "-uroot", "-proot", "-D", "newtonite", "-e", "SELECT 1"]
       interval: 5s
       timeout: 5s
       retries: 30

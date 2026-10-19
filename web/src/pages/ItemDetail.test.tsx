@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, waitFor, fireEvent, within } from '@testing-library/react'
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route, useNavigate } from 'react-router-dom'
 import { renderWithProviders } from '../test/test-utils'
 import { ItemDetail } from './ItemDetail'
 import type { ActivityEvent, WorkItem } from '../api/types'
@@ -26,34 +26,40 @@ describe('ItemDetail Page (Task 3.9)', () => {
     creator: { id: 5, displayName: 'Dana Lead', email: 'dana@example.com' },
   }
 
-  const mockEvents: ActivityEvent[] = [
-    {
-      id: 101,
-      workItemId: 42,
-      actorId: 5,
-      type: 'created',
-      createdAt: '2026-10-18T08:00:00.000Z',
-      actor: { id: 5, displayName: 'Dana Lead', email: 'dana@example.com' },
-    },
-    {
-      id: 102,
-      workItemId: 42,
-      actorId: 5,
-      type: 'assignee_changed',
-      fromValue: 'unassigned',
-      toValue: 'Charlie Engineer',
-      createdAt: '2026-10-18T08:30:00.000Z',
-      actor: { id: 5, displayName: 'Dana Lead', email: 'dana@example.com' },
-    },
-    {
-      id: 103,
-      workItemId: 42,
-      actorId: 10,
-      type: 'comment_added',
-      metadata: { body: 'Investigating upstream gateway latency.' },
-      createdAt: '2026-10-18T09:00:00.000Z',
-      actor: { id: 10, displayName: 'Charlie Engineer', email: 'charlie@example.com' },
-    },
+  const mockEventCreated: ActivityEvent = {
+    id: 101,
+    workItemId: 42,
+    actorId: 5,
+    type: 'created',
+    createdAt: '2026-10-18T08:00:00.000Z',
+    actor: { id: 5, displayName: 'Dana Lead', email: 'dana@example.com' },
+  }
+
+  const mockEventAssignee: ActivityEvent = {
+    id: 102,
+    workItemId: 42,
+    actorId: 5,
+    type: 'assignee_changed',
+    fromValue: 'unassigned',
+    toValue: 'Charlie Engineer',
+    createdAt: '2026-10-18T08:30:00.000Z',
+    actor: { id: 5, displayName: 'Dana Lead', email: 'dana@example.com' },
+  }
+
+  const mockEventComment: ActivityEvent = {
+    id: 103,
+    workItemId: 42,
+    actorId: 10,
+    type: 'comment_added',
+    metadata: { body: 'Investigating upstream gateway latency.' },
+    createdAt: '2026-10-18T09:00:00.000Z',
+    actor: { id: 10, displayName: 'Charlie Engineer', email: 'charlie@example.com' },
+  }
+
+  const mockEvents: readonly [ActivityEvent, ActivityEvent, ActivityEvent] = [
+    mockEventCreated,
+    mockEventAssignee,
+    mockEventComment,
   ]
 
   beforeEach(() => {
@@ -201,8 +207,19 @@ describe('ItemDetail Page (Task 3.9)', () => {
     expect(screen.getByRole('heading', { name: /Item not found/i })).toBeInTheDocument()
   })
 
-  it('submits a new comment and updates discussion', async () => {
+  it('submits a new comment and updates discussion, showing acknowledgement and rendering comment in timeline', async () => {
     let postedComment: unknown = null
+    let activityCallCount = 0
+    const newCommentEvent: ActivityEvent = {
+      id: 200,
+      workItemId: 42,
+      actorId: 5,
+      type: 'comment_added',
+      metadata: { body: 'Investigating third-party gateway latency.' },
+      createdAt: '2026-10-18T10:00:00.000Z',
+      actor: { id: 5, displayName: 'Dana Lead', email: 'dana@example.com' },
+    }
+
     fetchMock.mockImplementation((urlStr: string | URL | Request, init?: RequestInit) => {
       const url = typeof urlStr === 'string' ? urlStr : urlStr.toString()
       if (url.includes('/items/42/comments') && init?.method === 'POST') {
@@ -226,8 +243,10 @@ describe('ItemDetail Page (Task 3.9)', () => {
         )
       }
       if (url.includes('/items/42/activity')) {
+        activityCallCount++
+        const eventsToReturn = activityCallCount > 1 ? [...mockEvents, newCommentEvent] : mockEvents
         return Promise.resolve(
-          new Response(JSON.stringify({ events: mockEvents, nextCursor: null }), {
+          new Response(JSON.stringify({ events: eventsToReturn, nextCursor: null }), {
             status: 200,
             headers: { 'Content-Type': 'application/json' },
           }),
@@ -264,7 +283,440 @@ describe('ItemDetail Page (Task 3.9)', () => {
     await waitFor(() => {
       expect(postedComment).toEqual({ body: 'Investigating third-party gateway latency.' })
     })
+
+    // Author sees acknowledgement and draft is cleared
+    await waitFor(() => {
+      expect(commentInput).toHaveValue('')
+      expect(screen.getByText(/Comment posted/i)).toBeInTheDocument()
+    })
+
+    // Invalidation causes activity refetch and new comment visibly appears in timeline
+    await waitFor(() => {
+      expect(screen.getByTestId('activity-event-200')).toBeInTheDocument()
+      expect(screen.getByText('Investigating third-party gateway latency.')).toBeInTheDocument()
+    })
   })
+
+  it('preserves comment draft and displays error on comment submission failure', async () => {
+    fetchMock.mockImplementation((urlStr: string | URL | Request, init?: RequestInit) => {
+      const url = typeof urlStr === 'string' ? urlStr : urlStr.toString()
+      if (url.includes('/items/42/comments') && init?.method === 'POST') {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ error: { code: 'INTERNAL_ERROR', message: 'Failed to record comment' } }),
+            { status: 500, headers: { 'Content-Type': 'application/json' } },
+          ),
+        )
+      }
+      if (url.includes('/items/42/activity')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ events: mockEvents, nextCursor: null }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      if (url.includes('/items/42')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ item: mockItem }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }))
+    })
+
+    renderWithProviders(
+      <Routes>
+        <Route path="/items/:id" element={<ItemDetail userRole="member" />} />
+      </Routes>,
+      { route: '/items/42' },
+    )
+
+    const commentInput = await screen.findByLabelText(/Add a comment/i)
+    fireEvent.change(commentInput, {
+      target: { value: 'Draft comment text that should remain' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Post Comment/i }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('Failed to record comment')
+    })
+    expect(commentInput).toHaveValue('Draft comment text that should remain')
+  })
+
+  it('loads incremental activity pages with accumulated deduplicated events', async () => {
+    const page1Events: ActivityEvent[] = [
+      mockEventCreated,
+      mockEventAssignee,
+    ]
+    const page2Events: ActivityEvent[] = [
+      mockEventAssignee, // Duplicate event from page boundary
+      mockEventComment,
+    ]
+
+    fetchMock.mockImplementation((urlStr: string | URL | Request) => {
+      const url = typeof urlStr === 'string' ? urlStr : urlStr.toString()
+      if (url.includes('/items/42/activity')) {
+        if (url.includes('cursor=cursor-page-2')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ events: page2Events, nextCursor: null }), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            }),
+          )
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify({ events: page1Events, nextCursor: 'cursor-page-2' }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      if (url.includes('/items/42')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ item: mockItem }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }))
+    })
+
+    renderWithProviders(
+      <Routes>
+        <Route path="/items/:id" element={<ItemDetail />} />
+      </Routes>,
+      { route: '/items/42' },
+    )
+
+    // Initial page rendered
+    await waitFor(() => {
+      expect(screen.getByTestId('activity-event-101')).toBeInTheDocument()
+      expect(screen.getByTestId('activity-event-102')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('activity-event-103')).toBeNull()
+
+    // Load more button is present
+    const loadMoreBtn = screen.getByRole('button', { name: /Load more activity/i })
+    expect(loadMoreBtn).toBeInTheDocument()
+    fireEvent.click(loadMoreBtn)
+
+    // After loading next page: prior events are preserved and deduplicated
+    await waitFor(() => {
+      expect(screen.getByTestId('activity-event-103')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('activity-event-101')).toBeInTheDocument()
+    expect(screen.getByTestId('activity-event-102')).toBeInTheDocument()
+    // Exactly 3 unique cards rendered (not 4)
+    expect(screen.getAllByTestId(/activity-event-\d+/)).toHaveLength(3)
+
+    // Load more button disappears since nextCursor was null
+    expect(screen.queryByRole('button', { name: /Load more activity/i })).toBeNull()
+  })
+
+  it('renders explicit error and retry control on activity request error rather than empty state', async () => {
+    let failActivity = true
+
+    fetchMock.mockImplementation((urlStr: string | URL | Request) => {
+      const url = typeof urlStr === 'string' ? urlStr : urlStr.toString()
+      if (url.includes('/items/42/activity')) {
+        if (failActivity) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ error: { code: 'INTERNAL_ERROR', message: 'Activity service unavailable' } }),
+              { status: 500, headers: { 'Content-Type': 'application/json' } },
+            ),
+          )
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify({ events: mockEvents, nextCursor: null }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      if (url.includes('/items/42')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ item: mockItem }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }))
+    })
+
+    renderWithProviders(
+      <Routes>
+        <Route path="/items/:id" element={<ItemDetail />} />
+      </Routes>,
+      { route: '/items/42' },
+    )
+
+    // MUST NOT render empty state "No activity yet"
+    await waitFor(() => {
+      expect(screen.getByTestId('activity-error')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('empty-activity')).toBeNull()
+    expect(screen.queryByText('No activity yet')).toBeNull()
+
+    // Retry button exists and recovers
+    failActivity = false
+    const retryBtn = screen.getByRole('button', { name: /Retry/i })
+    fireEvent.click(retryBtn)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('activity-timeline')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('activity-error')).toBeNull()
+  })
+
+  it('posting comment when latest events exceed loaded page provides acknowledgement and route to load latest', async () => {
+    const page1Events: ActivityEvent[] = [mockEventCreated, mockEventAssignee]
+    const newCommentEvent: ActivityEvent = {
+      id: 201,
+      workItemId: 42,
+      actorId: 5,
+      type: 'comment_added',
+      metadata: { body: 'New comment landing on page 2' },
+      createdAt: '2026-10-18T11:00:00.000Z',
+      actor: { id: 5, displayName: 'Dana Lead', email: 'dana@example.com' },
+    }
+
+    fetchMock.mockImplementation((urlStr: string | URL | Request, init?: RequestInit) => {
+      const url = typeof urlStr === 'string' ? urlStr : urlStr.toString()
+      if (url.includes('/items/42/comments') && init?.method === 'POST') {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              comment: {
+                id: 105,
+                workItemId: 42,
+                authorId: 5,
+                body: 'New comment landing on page 2',
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              },
+            }),
+            { status: 201, headers: { 'Content-Type': 'application/json' } },
+          ),
+        )
+      }
+      if (url.includes('/items/42/activity')) {
+        if (url.includes('cursor=cursor-page-2')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ events: [newCommentEvent], nextCursor: null }), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            }),
+          )
+        }
+        // First page has nextCursor pointing to page 2
+        return Promise.resolve(
+          new Response(JSON.stringify({ events: page1Events, nextCursor: 'cursor-page-2' }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      if (url.includes('/items/42')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ item: mockItem }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }))
+    })
+
+    renderWithProviders(
+      <Routes>
+        <Route path="/items/:id" element={<ItemDetail userRole="member" />} />
+      </Routes>,
+      { route: '/items/42' },
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('activity-event-101')).toBeInTheDocument()
+    })
+
+    // Post comment
+    const commentInput = screen.getByLabelText(/Add a comment/i)
+    fireEvent.change(commentInput, { target: { value: 'New comment landing on page 2' } })
+    fireEvent.click(screen.getByRole('button', { name: /Post Comment/i }))
+
+    // Author sees truthful acknowledgement
+    await waitFor(() => {
+      expect(screen.getByText(/Comment posted/i)).toBeInTheDocument()
+    })
+
+    // Actionable route to load latest activity is available in acknowledgement
+    const ackRegion = screen.getByRole('status')
+    expect(ackRegion).toHaveTextContent(/Comment posted/i)
+    const ackLoadMoreBtn = within(ackRegion).getByRole('button', { name: 'Load more activity to see latest comments' })
+    expect(ackLoadMoreBtn).toBeInTheDocument()
+    fireEvent.click(ackLoadMoreBtn)
+    // After loading next page, the new comment appears in the accumulated timeline
+    await waitFor(() => {
+      expect(screen.getByTestId('activity-event-201')).toBeInTheDocument()
+      expect(screen.getByText('New comment landing on page 2')).toBeInTheDocument()
+    })
+    // Page 1 events still visible
+    expect(screen.getByTestId('activity-event-101')).toBeInTheDocument()
+  })
+
+  it('renders retry control on next-page failure while preserving existing loaded events', async () => {
+    let failPage2 = true
+    const page1Events: ActivityEvent[] = [mockEventCreated]
+    const page2Events: ActivityEvent[] = [mockEventAssignee]
+
+    fetchMock.mockImplementation((urlStr: string | URL | Request) => {
+      const url = typeof urlStr === 'string' ? urlStr : urlStr.toString()
+      if (url.includes('/items/42/activity')) {
+        if (url.includes('cursor=cursor-2')) {
+          if (failPage2) {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({ error: { code: 'TIMEOUT', message: 'Activity page timeout' } }),
+                { status: 504, headers: { 'Content-Type': 'application/json' } },
+              ),
+            )
+          }
+          return Promise.resolve(
+            new Response(JSON.stringify({ events: page2Events, nextCursor: null }), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            }),
+          )
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify({ events: page1Events, nextCursor: 'cursor-2' }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      if (url.includes('/items/42')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ item: mockItem }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }))
+    })
+
+    renderWithProviders(
+      <Routes>
+        <Route path="/items/:id" element={<ItemDetail />} />
+      </Routes>,
+      { route: '/items/42' },
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('activity-event-101')).toBeInTheDocument()
+    })
+
+    // Click load more, which fails
+    fireEvent.click(screen.getByRole('button', { name: /Load more activity/i }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('activity-next-error')).toBeInTheDocument()
+    })
+    // Page 1 event is still in the document
+    expect(screen.getByTestId('activity-event-101')).toBeInTheDocument()
+
+    // Retry page 2
+    failPage2 = false
+    const retryBtn = within(screen.getByTestId('activity-next-error')).getByRole('button', { name: /Retry/i })
+    fireEvent.click(retryBtn)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('activity-event-102')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('activity-next-error')).toBeNull()
+  })
+
+  it('resets activity pagination when navigating between work items', async () => {
+    fetchMock.mockImplementation((urlStr: string | URL | Request) => {
+      const url = typeof urlStr === 'string' ? urlStr : urlStr.toString()
+      if (url.includes('/items/42/activity')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ events: [mockEventCreated], nextCursor: 'cursor-42-2' }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      if (url.includes('/items/43/activity')) {
+        const item43Event: ActivityEvent = {
+          id: 501,
+          workItemId: 43,
+          actorId: 5,
+          type: 'created',
+          createdAt: '2026-10-19T08:00:00.000Z',
+          actor: { id: 5, displayName: 'Dana Lead', email: 'dana@example.com' },
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify({ events: [item43Event], nextCursor: null }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      if (url.includes('/items/42')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ item: mockItem }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      if (url.includes('/items/43')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ item: { ...mockItem, id: 43, title: 'Second item' } }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }))
+    })
+
+    function NavTestComponent() {
+      const navigate = useNavigate()
+      return (
+        <div>
+          <button type="button" onClick={() => navigate('/items/43')}>
+            Switch to item 43
+          </button>
+          <Routes>
+            <Route path="/items/:id" element={<ItemDetail />} />
+          </Routes>
+        </div>
+      )
+    }
+
+    renderWithProviders(<NavTestComponent />, { route: '/items/42' })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('activity-event-101')).toBeInTheDocument()
+    })
+
+    // Truly navigate router to item 43
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to item 43' }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('activity-event-501')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('activity-event-101')).toBeNull()
+  })
+
 
   it('lets the current member assignee start an assigned open item', async () => {
     const assignedOpenItem: WorkItem = { ...mockItem, status: 'open' }
@@ -402,11 +854,115 @@ describe('ItemDetail Page (Task 3.9)', () => {
     fireEvent.click(startBtn)
 
     await waitFor(() => {
-      expect(transitionPayload).toEqual({
+      expect(transitionPayload).toMatchObject({
         to: 'in_progress',
         reason: 'Beginning triage investigation',
       })
     })
+  })
+
+  it('rejects stale transition decision when item version changed on server, preserves reason draft, and succeeds after reload', async () => {
+    // The server is already ahead of the snapshot this client loaded: a
+    // concurrent edit moved the item to version 4, so the first load returns
+    // the stale version-3 view and the reload returns current server state.
+    let serverItem: WorkItem = {
+      ...mockItem,
+      status: 'in_progress',
+      version: 4,
+      title: 'Updated title from concurrent edit',
+    }
+    let itemLoadCount = 0
+
+    fetchMock.mockImplementation((urlStr: string | URL | Request, init?: RequestInit) => {
+      const url = typeof urlStr === 'string' ? urlStr : urlStr.toString()
+      if (url.includes('/items/42/transition') && init?.method === 'POST') {
+        const body = JSON.parse(String(init.body)) as { to: WorkItem['status']; expectedVersion: number }
+        if (body.expectedVersion !== serverItem.version) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                error: {
+                  code: 'VERSION_MISMATCH',
+                  message: 'Version mismatch.',
+                },
+              }),
+              { status: 409, headers: { 'Content-Type': 'application/json' } },
+            ),
+          )
+        }
+        serverItem = { ...serverItem, status: body.to, version: serverItem.version + 1 }
+        return Promise.resolve(
+          new Response(JSON.stringify({ item: serverItem }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      if (url.includes('/items/42/activity')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ events: mockEvents, nextCursor: null }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      if (url.includes('/items/42')) {
+        itemLoadCount++
+        const payload = itemLoadCount === 1 ? { ...mockItem, status: 'in_progress', version: 3 } : serverItem
+        return Promise.resolve(
+          new Response(JSON.stringify({ item: payload }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }))
+    })
+
+    renderWithProviders(
+      <Routes>
+        <Route
+          path="/items/:id"
+          element={<ItemDetail currentUser={{ id: 5, displayName: 'Dana Lead', email: 'dana@example.com' }} userRole="lead" />}
+        />
+      </Routes>,
+      { route: '/items/42' },
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('item-status')).toHaveTextContent('in progress')
+    })
+
+    const reasonInput = screen.getByPlaceholderText(/Transition reason \(optional\)/i)
+    fireEvent.change(reasonInput, { target: { value: 'Implementation ready for lead review.' } })
+
+    const submitApprovalBtn = screen.getByTestId('submit-approval-button')
+    fireEvent.click(submitApprovalBtn)
+
+    // Stale decision rejected: rolls back to in progress, shows conflict alert, and preserves reason draft
+    await waitFor(() => {
+      expect(screen.getByTestId('item-status')).toHaveTextContent('in progress')
+      expect(screen.getByRole('alert')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /reload item/i })).toBeInTheDocument()
+    })
+    expect(reasonInput).toHaveValue('Implementation ready for lead review.')
+
+    // Reload item to receive current server version
+    fireEvent.click(screen.getByRole('button', { name: /reload item/i }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).toBeNull()
+      expect(screen.getByTestId('item-title')).toHaveTextContent('Updated title from concurrent edit')
+    })
+    expect(reasonInput).toHaveValue('Implementation ready for lead review.')
+
+    // Retry decision with refreshed version
+    fireEvent.click(screen.getByTestId('submit-approval-button'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('item-status')).toHaveTextContent('awaiting approval')
+    })
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 
   it('forbids terminal lifecycle changes on closed items while keeping lead assignment and edit available', async () => {

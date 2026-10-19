@@ -68,6 +68,7 @@ export async function withIdempotency<T>(
   endpoint: string,
   body: unknown,
   fn: (tx: Tx) => Promise<IdempotencyHandlerResult<T>>,
+  authorize?: (tx: Tx) => Promise<void>,
 ): Promise<IdempotencyResult<T>> {
   if (!key || typeof key !== 'string' || key.trim().length === 0 || key.length > 255) {
     throw ApiError.of('VALIDATION_ERROR', 'Idempotency key must be between 1 and 255 characters')
@@ -91,6 +92,9 @@ export async function withIdempotency<T>(
             if (existing.endpoint !== endpoint || existing.requestHash !== currentHash) {
               throw ApiError.of('IDEMPOTENCY_KEY_MISMATCH')
             }
+            if (authorize) {
+              await authorize(tx)
+            }
             return {
               status: existing.responseStatus,
               body: existing.responseBody as T,
@@ -101,6 +105,9 @@ export async function withIdempotency<T>(
           await tx
             .delete(idempotencyKeys)
             .where(eq(idempotencyKeys.id, existing.id))
+        }
+        if (authorize) {
+          await authorize(tx)
         }
 
         const res = await fn(tx)

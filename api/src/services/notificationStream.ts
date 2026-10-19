@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express'
-import { eq } from 'drizzle-orm'
+import { desc, eq } from 'drizzle-orm'
 import { decodeJwt } from 'jose'
 import { db } from '../db/client'
 import { notifications, users } from '../db/schema'
@@ -15,6 +15,23 @@ export interface StreamOptions {
   heartbeatIntervalMs?: number
   backpressureTimeoutMs?: number
 }
+
+/**
+ * Notification SSE Stream Contract:
+ * - Bounded Snapshot: Initial connection delivers up to DEFAULT_SNAPSHOT_LIMIT (50) recent visible notifications.
+ *   Complete persistent history is accessible via keyset-paginated GET /notifications.
+ * - Accurate History Count: unreadCount always reflects the full visible unread count across the user's lifetime.
+ * - Sliding Lookback Polling: Recurring 1-second ticks scan the most recent DEFAULT_POLL_BATCH_SIZE (100)
+ *   recipient notification IDs using the indexed (recipientUserId, id) descending scan. This captures
+ *   concurrent out-of-order and delayed lower-ID commits without whole-table scans or missed late commits.
+ * - Bounded Connection Memory: Tracks at most DEFAULT_MAX_SEEN_CACHE_SIZE (500) IDs in connection memory via FIFO eviction,
+ *   preventing process memory exhaustion on long-lived connections.
+ * - Catch-up Disconnection Semantics: SSE does not claim exactly-once or full-replay semantics across long disconnects;
+ *   clients catch up on historical records through the paginated /notifications feed.
+ */
+export const SNAPSHOT_LIMIT = 50
+export const POLL_BATCH_SIZE = 100
+export const MAX_SEEN_CACHE_SIZE = 500
 
 export async function handleNotificationStream(
   actor: Actor,
@@ -60,6 +77,17 @@ export async function handleNotificationStream(
 
   // Internal state
   const seenNotificationIds = new Set<number>()
+  const markSeen = (id: number) => {
+    seenNotificationIds.add(id)
+    while (seenNotificationIds.size > MAX_SEEN_CACHE_SIZE) {
+      const oldest = seenNotificationIds.values().next().value
+      if (oldest !== undefined) {
+        seenNotificationIds.delete(oldest)
+      } else {
+        break
+      }
+    }
+  }
   let lastUnreadCount = 0
   let isClosed = false
   let isTicking = false
@@ -148,13 +176,17 @@ export async function handleNotificationStream(
   // 4. Baseline snapshot initialization
   try {
 
-    // Record baseline of ALL recipient notification IDs (including membership-hidden rows)
-    const allRecipientRows = await db
+    // Record baseline of bounded recent recipient notification IDs (including membership-hidden rows)
+    const recentRecipientRows = await db
       .select({ id: notifications.id })
       .from(notifications)
       .where(eq(notifications.recipientUserId, actor.id))
-    // Fetch visible notifications for the snapshot
-    const initialVisibleNotifications = await fetchVisibleNotifications(actor.id)
+      .orderBy(desc(notifications.id))
+      .limit(POLL_BATCH_SIZE)
+    // Fetch bounded visible notifications for the snapshot
+    const initialVisibleNotifications = await fetchVisibleNotifications(actor.id, {
+      limit: SNAPSHOT_LIMIT,
+    })
     lastUnreadCount = await countVisibleUnreadNotifications(actor.id)
 
     const ok = await writeData(
@@ -168,11 +200,11 @@ export async function handleNotificationStream(
       return
     }
 
-    for (const row of allRecipientRows) {
-      seenNotificationIds.add(row.id)
+    for (const row of recentRecipientRows) {
+      markSeen(row.id)
     }
     for (const notif of initialVisibleNotifications) {
-      seenNotificationIds.add(notif.id)
+      markSeen(notif.id)
     }
   } catch {
     cleanup()
@@ -225,22 +257,27 @@ export async function handleNotificationStream(
         return
       }
 
-      // Scan all recipient notification IDs (using indexed recipient query)
+      // Scan bounded recent recipient notification IDs (using indexed recipient query)
       const currentRows = await db
         .select({ id: notifications.id })
         .from(notifications)
         .where(eq(notifications.recipientUserId, actor.id))
+        .orderBy(desc(notifications.id))
+        .limit(POLL_BATCH_SIZE)
 
       const unseenIds: number[] = []
-      for (const row of currentRows) {
-        if (!seenNotificationIds.has(row.id)) {
-          unseenIds.push(row.id)
+      for (let i = currentRows.length - 1; i >= 0; i--) {
+        const id = currentRows[i]!.id
+        if (!seenNotificationIds.has(id)) {
+          unseenIds.push(id)
         }
       }
 
       let newVisibleNotifications: NotificationView[] = []
       if (unseenIds.length > 0) {
-        newVisibleNotifications = await fetchVisibleNotifications(actor.id, unseenIds)
+        newVisibleNotifications = await fetchVisibleNotifications(actor.id, {
+          specificIds: unseenIds,
+        })
       }
 
       const currentUnreadCount = await countVisibleUnreadNotifications(actor.id)
@@ -271,7 +308,7 @@ export async function handleNotificationStream(
       }
 
       for (const id of unseenIds) {
-        seenNotificationIds.add(id)
+        markSeen(id)
       }
     } catch {
       // Release tick and continue next cycle

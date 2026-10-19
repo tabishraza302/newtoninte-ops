@@ -112,13 +112,24 @@ export function useItem(
 
 export function useItemActivity(
   id: number,
-  cursor?: string,
-): UseQueryResult<ActivityResponse, Error> {
-  const qs = cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''
-  return useQuery<ActivityResponse, Error>({
-    queryKey: ['item-activity', id, cursor],
-    queryFn: () => apiFetch<ActivityResponse>(`/items/${id}/activity${qs}`),
-    enabled: Number.isInteger(id) && id > 0,
+  opts?: { limit?: number; enabled?: boolean } | string,
+): UseInfiniteQueryResult<InfiniteData<ActivityResponse, string | undefined>, Error> {
+  const options = typeof opts === 'object' ? opts : undefined
+  const limit = options?.limit ?? 20
+  const isEnabled = options?.enabled !== undefined ? options.enabled : (Number.isInteger(id) && id > 0)
+
+  return useInfiniteQuery({
+    queryKey: ['item-activity', id],
+    queryFn: ({ pageParam }) => {
+      const params = new URLSearchParams()
+      if (pageParam) params.set('cursor', pageParam)
+      if (options?.limit) params.set('limit', String(limit))
+      const qs = params.toString() ? `?${params.toString()}` : ''
+      return apiFetch<ActivityResponse>(`/items/${id}/activity${qs}`)
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    enabled: isEnabled,
     retry: false,
   })
 }
@@ -696,7 +707,7 @@ export function useAddComment(): UseMutationResult<
         json: { body },
       }),
     onSuccess: (_data, vars) => {
-      void queryClient.invalidateQueries({ queryKey: ['items', vars.itemId, 'activity'] })
+      void queryClient.invalidateQueries({ queryKey: ['item-activity', vars.itemId] })
     },
   })
 }

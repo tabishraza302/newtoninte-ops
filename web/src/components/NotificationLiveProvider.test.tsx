@@ -1029,4 +1029,74 @@ describe('NotificationLiveProvider', () => {
     cleanup()
     abortController.abort()
   })
+
+  it('bounds pending toast queue to prevent unbounded memory growth during bursts', async () => {
+    const sse = createMockSSEStream()
+
+    globalThis.fetch = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/notifications/stream')) {
+        return Promise.resolve(
+          new Response(sse.stream, {
+            status: 200,
+            headers: { 'Content-Type': 'text/event-stream' },
+          }),
+        )
+      }
+      return Promise.resolve(new Response(JSON.stringify({}), { status: 200 }))
+    })
+
+    const queryClient = createTestQueryClient()
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AuthContext.Provider value={makeAuthValue(mockUserOne)}>
+          <MemoryRouter>
+            <NotificationLiveProvider>
+              <div>Dashboard Content</div>
+            </NotificationLiveProvider>
+          </MemoryRouter>
+        </AuthContext.Provider>
+      </QueryClientProvider>,
+    )
+
+    await act(async () => {
+      sse.emitEvent('snapshot', { notifications: [], unreadCount: 0 })
+    })
+
+    // Emit a burst of 15 notifications (exceeding bounded pending toast queue limit of 10)
+    const burstNotifications = Array.from({ length: 15 }, (_, i) =>
+      createNotification({
+        id: 100 + i,
+        itemTitle: `Burst Item ${i + 1}`,
+        workItemId: 1000 + i,
+        actor: { id: 3, displayName: 'Alice' },
+      }),
+    )
+
+    await act(async () => {
+      sse.emitEvent('notifications', {
+        notifications: burstNotifications,
+        unreadCount: 15,
+      })
+    })
+
+    // 3 visible toasts should be rendered initially
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: 'Dismiss notification' })).toHaveLength(3)
+    })
+
+    // Dismiss 10 toasts sequentially (exhausting the bounded queue capacity of 10 items)
+    for (let d = 0; d < 10; d++) {
+      const dismissButtons = screen.getAllByRole('button', { name: 'Dismiss notification' })
+      await act(async () => {
+        fireEvent.click(dismissButtons[0]!)
+      })
+    }
+
+    // Since queue is bounded to 10 items, the 11th through 15th overflow items were discarded.
+    // Therefore, no more toasts should remain in DOM.
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Dismiss notification' })).toBeNull()
+    })
+  })
 })

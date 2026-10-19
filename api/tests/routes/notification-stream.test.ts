@@ -12,7 +12,7 @@ import { withTransaction } from '../../src/db/tx'
 import type { Actor } from '../../src/domain/types'
 import { currentActor, requireAuth } from '../../src/http/middleware/auth'
 import { createItem } from '../../src/services/items'
-import { createNotifications, markNotificationRead } from '../../src/services/notifications'
+import { createNotifications, listNotifications, markNotificationRead } from '../../src/services/notifications'
 import { handleNotificationStream } from '../../src/services/notificationStream'
 import { signAccessToken } from '../../src/services/tokens'
 import { resetDb, seedItem, seedMembership, seedTeam, seedUser } from '../helpers/db'
@@ -24,7 +24,11 @@ interface SseEvent {
 
 interface SseClient {
   events: SseEvent[]
-  waitForEvent: (eventName: string, timeoutMs?: number) => Promise<SseEvent>
+  waitForEvent: (
+    eventName: string,
+    predicateOrTimeout?: ((event: SseEvent) => boolean) | number,
+    timeoutMs?: number,
+  ) => Promise<SseEvent>
   close: () => void
   req: http.ClientRequest
   resPromise: Promise<http.IncomingMessage>
@@ -91,8 +95,16 @@ function openSseStream(
 
   req.end()
 
-  const waitForEvent = (eventName: string, timeoutMs = 4000): Promise<SseEvent> => {
-    const existing = events.find((e) => e.event === eventName)
+  const waitForEvent = (
+    eventName: string,
+    predicateOrTimeout?: ((event: SseEvent) => boolean) | number,
+    timeoutMs = 4000,
+  ): Promise<SseEvent> => {
+    const predicate = typeof predicateOrTimeout === 'function' ? predicateOrTimeout : undefined
+    const timeout = typeof predicateOrTimeout === 'number' ? predicateOrTimeout : timeoutMs
+
+    const matches = (e: SseEvent) => e.event === eventName && (!predicate || predicate(e))
+    const existing = events.find(matches)
     if (existing) return Promise.resolve(existing)
 
     const { promise, resolve, reject } = Promise.withResolvers<SseEvent>()
@@ -104,10 +116,10 @@ function openSseStream(
           `Timed out waiting for event "${eventName}". Events seen: ${JSON.stringify(events)}`,
         ),
       )
-    }, timeoutMs)
+    }, timeout)
 
     const check = () => {
-      const found = events.find((e) => e.event === eventName)
+      const found = events.find(matches)
       if (found) {
         cleanupListener()
         resolve(found)
@@ -603,5 +615,123 @@ describe('Notification SSE stream routes (/notifications/stream)', () => {
       pool.query = originalQuery
       client.close()
     }
+  })
+
+  it('bounds initial snapshot notifications to bounded limit while keeping total unreadCount accurate across large history', async () => {
+    const team = await seedTeam()
+    const creator = await seedUser()
+    const recipient = await seedUser()
+    await seedMembership(creator.id, team.id, 'lead')
+    await seedMembership(recipient.id, team.id, 'member')
+
+    const item = await seedItem(team.id, { createdBy: creator.id })
+
+    // Seed 60 notifications (exceeding default snapshot bound of 50)
+    for (let i = 1; i <= 60; i++) {
+      const [act] = await db
+        .insert(activityEvents)
+        .values({
+          workItemId: item.id,
+          actorId: creator.id,
+          type: 'assigned',
+        })
+        .$returningId()
+      await db.insert(notifications).values({
+        recipientUserId: recipient.id,
+        activityEventId: act!.id,
+        type: 'assigned',
+      })
+    }
+
+    const token = await signAccessToken(recipient.id)
+    const client = openSseStream(baseUrl, token)
+
+    const snapshot = await client.waitForEvent('snapshot')
+    const parsed = JSON.parse(snapshot.data ?? '{}')
+
+    // Bounded snapshot must not dump all 60 items into memory/network payload
+    expect(parsed.notifications).toHaveLength(50)
+    // Total unreadCount must still accurately reflect full persistent history
+    expect(parsed.unreadCount).toBe(60)
+
+    // Complete history remains accessible through paginated feed
+    const recipientActor: Actor = { id: recipient.id, isAdmin: false }
+    const firstPage = await listNotifications(recipientActor, { limit: 20 })
+    expect(firstPage.notifications).toHaveLength(20)
+    expect(firstPage.nextCursor).not.toBeNull()
+
+    const secondPage = await listNotifications(recipientActor, {
+      cursor: firstPage.nextCursor!,
+      limit: 20,
+    })
+    expect(secondPage.notifications).toHaveLength(20)
+
+    client.close()
+  })
+
+  it('delivers delayed lower-ID commit that arrives after higher-ID notification within polling window', async () => {
+    const team = await seedTeam()
+    const creator = await seedUser()
+    const recipient = await seedUser()
+    await seedMembership(creator.id, team.id, 'lead')
+    await seedMembership(recipient.id, team.id, 'member')
+
+    const token = await signAccessToken(recipient.id)
+    const client = openSseStream(baseUrl, token)
+    await client.waitForEvent('snapshot')
+
+    const item1 = await seedItem(team.id, { createdBy: creator.id, title: 'Item Lower ID' })
+    const item2 = await seedItem(team.id, { createdBy: creator.id, title: 'Item Higher ID' })
+
+    // Step 1: Open an explicit transaction that inserts lower-ID notification but does NOT commit yet
+    const { promise: tx1CanCommit, resolve: resolveTx1Commit } = Promise.withResolvers<void>()
+    const { promise: tx1Started, resolve: resolveTx1Started } = Promise.withResolvers<void>()
+
+    const tx1Promise = withTransaction(async (tx) => {
+      const [act1] = await tx
+        .insert(activityEvents)
+        .values({ workItemId: item1.id, actorId: creator.id, type: 'assigned' })
+        .$returningId()
+      await tx.insert(notifications).values({
+        recipientUserId: recipient.id,
+        activityEventId: act1!.id,
+        type: 'assigned',
+      })
+      resolveTx1Started()
+      await tx1CanCommit
+    })
+
+    await tx1Started
+
+    // Step 2: In a separate transaction, insert and immediately commit higher-ID notification
+    const [act2] = await db
+      .insert(activityEvents)
+      .values({ workItemId: item2.id, actorId: creator.id, type: 'assigned' })
+      .$returningId()
+    await db.insert(notifications).values({
+      recipientUserId: recipient.id,
+      activityEventId: act2!.id,
+      type: 'assigned',
+    })
+
+    // Step 3: Stream receives higher-ID notification first
+    const higherEvent = await client.waitForEvent('notifications', (e) =>
+      e.data?.includes('Item Higher ID') ?? false,
+    )
+    const higherParsed = JSON.parse(higherEvent.data ?? '{}')
+    expect(higherParsed.notifications[0].itemTitle).toBe('Item Higher ID')
+
+    // Step 4: Now commit lower-ID transaction
+    resolveTx1Commit()
+    await tx1Promise
+
+    // Step 5: Stream must deliver lower-ID notification despite having lower ID than already delivered event
+    const lowerEvent = await client.waitForEvent('notifications', (e) =>
+      e.data?.includes('Item Lower ID') ?? false,
+    )
+    const lowerParsed = JSON.parse(lowerEvent.data ?? '{}')
+    expect(lowerParsed.notifications[0].itemTitle).toBe('Item Lower ID')
+
+    client.close()
   })
 })

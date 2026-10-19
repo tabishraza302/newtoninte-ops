@@ -66,6 +66,7 @@ export function ActivityTimeline({
     )
   }
 
+
   if (events.length === 0) {
     return (
       <div

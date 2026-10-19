@@ -14,6 +14,10 @@ export interface ToastItem {
   notification: CollaborationNotification
 }
 
+export const MAX_VISIBLE_TOASTS = 3
+export const MAX_PENDING_TOASTS = 10
+export const MAX_SEEN_CACHE_SIZE = 200
+
 export interface NotificationLiveProviderProps {
   children: React.ReactNode
 }
@@ -163,6 +167,31 @@ function NotificationLiveSession({ userId }: { userId: number }): React.ReactEle
   const seenNotificationIdsRef = useRef<Set<number>>(new Set())
   const isBaselineEstablishedRef = useRef(false)
 
+  const recordSeenId = (id: number) => {
+    const set = seenNotificationIdsRef.current
+    set.add(id)
+    while (set.size > MAX_SEEN_CACHE_SIZE) {
+      const oldest = set.values().next().value
+      if (oldest !== undefined) {
+        set.delete(oldest)
+      } else {
+        break
+      }
+    }
+  }
+
+  const enqueueToasts = (newItems: ToastItem[]) => {
+    setToasts((prev) => {
+      const combined = [...prev, ...newItems]
+      if (combined.length <= MAX_PENDING_TOASTS) {
+        return combined
+      }
+      const visible = combined.slice(0, MAX_VISIBLE_TOASTS)
+      const pending = combined.slice(MAX_VISIBLE_TOASTS)
+      const keptPending = pending.slice(-(MAX_PENDING_TOASTS - visible.length))
+      return [...visible, ...keptPending]
+    })
+  }
   const [isMobile, setIsMobile] = useState(() => {
     if (typeof window === 'undefined') return false
     return window.matchMedia('(max-width: 768px)').matches
@@ -194,19 +223,19 @@ function NotificationLiveSession({ userId }: { userId: number }): React.ReactEle
         if (!isBaselineEstablishedRef.current) {
           isBaselineEstablishedRef.current = true
           for (const item of data.notifications) {
-            seenNotificationIdsRef.current.add(item.id)
+            recordSeenId(item.id)
           }
         } else {
           const sorted = [...data.notifications].sort((a, b) => a.id - b.id)
           const newItems: ToastItem[] = []
           for (const item of sorted) {
             if (!seenNotificationIdsRef.current.has(item.id)) {
-              seenNotificationIdsRef.current.add(item.id)
+              recordSeenId(item.id)
               newItems.push({ id: item.id, notification: item })
             }
           }
           if (newItems.length > 0) {
-            setToasts((prev) => [...prev, ...newItems])
+            enqueueToasts(newItems)
           }
         }
       },
@@ -221,12 +250,12 @@ function NotificationLiveSession({ userId }: { userId: number }): React.ReactEle
         const newItems: ToastItem[] = []
         for (const item of sorted) {
           if (!seenNotificationIdsRef.current.has(item.id)) {
-            seenNotificationIdsRef.current.add(item.id)
+            recordSeenId(item.id)
             newItems.push({ id: item.id, notification: item })
           }
         }
         if (newItems.length > 0) {
-          setToasts((prev) => [...prev, ...newItems])
+          enqueueToasts(newItems)
         }
       },
       onSummary: (data) => {
@@ -249,7 +278,7 @@ function NotificationLiveSession({ userId }: { userId: number }): React.ReactEle
     setToasts((prev) => prev.filter((item) => item.id !== id))
   }, [])
 
-  const visibleToasts = toasts.slice(0, 3)
+  const visibleToasts = toasts.slice(0, MAX_VISIBLE_TOASTS)
 
   if (visibleToasts.length === 0) {
     return null

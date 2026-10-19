@@ -119,22 +119,27 @@ export function mapNotificationRow(r: NotificationRow): NotificationView {
   }
 }
 
+export interface FetchVisibleNotificationsOptions {
+  specificIds?: number[]
+  limit?: number
+}
+
 /**
- * Fetches visible notifications for a recipient, optionally filtered to a specific set of IDs.
+ * Fetches visible notifications for a recipient, optionally filtered to specific IDs and/or bounded by a limit.
  */
 export async function fetchVisibleNotifications(
   recipientUserId: number,
-  specificIds?: number[],
+  options?: FetchVisibleNotificationsOptions,
 ): Promise<NotificationView[]> {
   const conditions = [
     eq(notifications.recipientUserId, recipientUserId),
     eq(memberships.userId, recipientUserId),
   ]
-  if (specificIds && specificIds.length > 0) {
-    conditions.push(inArray(notifications.id, specificIds))
+  if (options?.specificIds && options.specificIds.length > 0) {
+    conditions.push(inArray(notifications.id, options.specificIds))
   }
 
-  const rows = await db
+  let query = db
     .select({
       id: notifications.id,
       type: notifications.type,
@@ -162,6 +167,11 @@ export async function fetchVisibleNotifications(
     .where(and(...conditions))
     .orderBy(desc(notifications.id))
 
+  if (typeof options?.limit === 'number' && options.limit > 0) {
+    query = query.limit(options.limit) as typeof query
+  }
+
+  const rows = await query
   return rows.map(mapNotificationRow)
 }
 

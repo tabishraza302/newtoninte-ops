@@ -20,6 +20,7 @@ import {
   type ViewName,
 } from '../../services/items'
 import { withIdempotency } from '../../services/idempotency'
+import { authorize } from '../../policy'
 
 export const itemsRouter: Router = Router()
 
@@ -161,6 +162,8 @@ itemsRouter.post('/items', requireAuth(), async (req: Request, res: Response, ne
       ...(body.assigneeId !== undefined ? { assigneeId: body.assigneeId } : {}),
     }
 
+    await authorize(actor, 'item:create', { kind: 'team', teamId: createInput.teamId })
+
     const idempotencyKeyHeader = req.headers['idempotency-key']
     const idempotencyKey = typeof idempotencyKeyHeader === 'string'
       ? idempotencyKeyHeader.trim()
@@ -184,6 +187,9 @@ itemsRouter.post('/items', requireAuth(), async (req: Request, res: Response, ne
             body: { item },
             resourceId: item.id,
           }
+        },
+        async (tx) => {
+          await authorize(actor, 'item:create', { kind: 'team', teamId: createInput.teamId }, tx)
         },
       )
       res.status(result.status).json(result.body)

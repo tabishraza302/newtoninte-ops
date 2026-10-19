@@ -5,7 +5,7 @@
 # Build context is the repository root (see docker-compose.yml): the lockfile
 # and tsconfig.base.json live there and are needed for a frozen install.
 # ---------------------------------------------------------------------------
-FROM oven/bun:1-alpine AS build
+FROM oven/bun:1.4.3-alpine AS build
 
 WORKDIR /app
 

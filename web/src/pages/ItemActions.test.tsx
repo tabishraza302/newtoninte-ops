@@ -484,6 +484,7 @@ describe('ItemActions & Optimistic Rollback (Task 4.13)', () => {
       expect(screen.getByTestId('item-status')).toHaveTextContent('awaiting approval')
     })
 
+
     // Server rejects with 409 STALE_STATE
     resolveTransitionPromise!(
       new Response(

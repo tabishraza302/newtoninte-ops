@@ -237,4 +237,123 @@ describe('ItemForm Component (Task 4.12)', () => {
     fireEvent.click(screen.getByTestId('reload-button'))
     expect(onReload).toHaveBeenCalledTimes(1)
   })
+
+  it('retains edit-session baseline when parent refetches item: uses original version, excludes untouched fields, surfaces conflict without discarding draft', async () => {
+    const patchBodies: Array<Record<string, unknown>> = []
+    fetchMock.mockImplementation((_url: string, init?: RequestInit) => {
+      if (init?.body) {
+        patchBodies.push(JSON.parse(String(init.body)) as Record<string, unknown>)
+      }
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 'VERSION_CONFLICT',
+              message: 'Item has been modified by another user',
+              details: { currentVersion: 5 },
+            },
+          }),
+          { status: 409, headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+    })
+
+    const onReload = vi.fn()
+    const { rerender } = renderWithProviders(
+      <ItemForm item={mockItem} userRole="lead" onReload={onReload} />,
+    )
+
+    // User starts typing in title only
+    const titleInput = screen.getByLabelText(/title/i)
+    fireEvent.change(titleInput, { target: { value: 'User Draft Title' } })
+
+    // While draft is open, parent query refetches and rerenders with updated item from server:
+    // title was concurrently changed to 'Concurrent Remote Title', description to 'Remote Description', version bumped to 5
+    const remotelyUpdatedItem: WorkItem = {
+      ...mockItem,
+      version: 5,
+      title: 'Concurrent Remote Title',
+      description: 'Remote Description',
+    }
+
+    rerender(
+      <ItemForm item={remotelyUpdatedItem} userRole="lead" onReload={onReload} />,
+    )
+
+    // User draft is NOT reset
+    expect(titleInput).toHaveValue('User Draft Title')
+    expect(screen.getByLabelText(/description/i)).toHaveValue('Original Description')
+
+    // Submit draft
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('version-conflict')).toBeInTheDocument()
+    })
+
+    // Verify patch payload:
+    // 1) Must use original baseline version (4), not the new prop version (5)
+    // 2) Must NOT send description (which is 'Original Description' locally vs 'Remote Description' in prop),
+    //    because it was untouched by user relative to baseline!
+    // 3) Only changed title is sent
+    expect(patchBodies.length).toBe(1)
+    expect(patchBodies[0]).toEqual({
+      version: 4,
+      title: 'User Draft Title',
+    })
+
+    // Draft is preserved after conflict is surfaced
+    expect(screen.getByLabelText(/title/i)).toHaveValue('User Draft Title')
+  })
+
+  it('reopening or switching to a new item creates a new baseline', async () => {
+    const patchBodies: Array<Record<string, unknown>> = []
+    fetchMock.mockImplementation((_url: string, init?: RequestInit) => {
+      if (init?.body) {
+        patchBodies.push(JSON.parse(String(init.body)) as Record<string, unknown>)
+      }
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            item: { ...mockItem, id: 202, title: 'Item 2 Updated', version: 11 },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+    })
+
+    const { rerender } = renderWithProviders(
+      <ItemForm item={mockItem} userRole="lead" />,
+    )
+    expect(screen.getByLabelText(/title/i)).toHaveValue('Original Title')
+
+    // Switch to a completely different item (e.g. user opens item 202)
+    const item2: WorkItem = {
+      ...mockItem,
+      id: 202,
+      title: 'Item 2 Title',
+      description: 'Item 2 Description',
+      version: 10,
+    }
+
+    rerender(
+      <ItemForm item={item2} userRole="lead" />,
+    )
+
+    // Fields and baseline should reset to item2
+    const titleInput = screen.getByLabelText(/title/i)
+    expect(titleInput).toHaveValue('Item 2 Title')
+    expect(screen.getByLabelText(/description/i)).toHaveValue('Item 2 Description')
+
+    fireEvent.change(titleInput, { target: { value: 'Item 2 Updated' } })
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+
+    await waitFor(() => {
+      expect(patchBodies.length).toBe(1)
+    })
+    expect(patchBodies[0]).toEqual({
+      version: 10,
+      title: 'Item 2 Updated',
+    })
+  })
 })

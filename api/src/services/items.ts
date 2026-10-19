@@ -605,7 +605,10 @@ export async function patchItem(actor: Actor, id: number, input: PatchItemInput)
     'dueAt' in input ||
     'due_at' in input
 
-  if (hasContentField) {
+  const hasPriorityField = 'priority' in input
+  const requiresContentAuth = hasContentField || !hasPriorityField
+
+  if (requiresContentAuth) {
     await authorize(actor, 'item:editContent', {
       kind: 'item',
       teamId: existing.teamId,
@@ -614,7 +617,7 @@ export async function patchItem(actor: Actor, id: number, input: PatchItemInput)
     })
   }
 
-  if ('priority' in input) {
+  if (hasPriorityField) {
     await authorize(actor, 'item:editPriority', {
       kind: 'item',
       teamId: existing.teamId,
@@ -669,7 +672,7 @@ export async function patchItem(actor: Actor, id: number, input: PatchItemInput)
   }
 
   await withTransaction(async (tx) => {
-    if (hasContentField) {
+    if (requiresContentAuth) {
       await authorize(actor, 'item:editContent', {
         kind: 'item',
         teamId: existing.teamId,
@@ -677,7 +680,7 @@ export async function patchItem(actor: Actor, id: number, input: PatchItemInput)
         assigneeId: existing.assigneeId,
       }, tx)
     }
-    if ('priority' in input) {
+    if (hasPriorityField) {
       await authorize(actor, 'item:editPriority', {
         kind: 'item',
         teamId: existing.teamId,

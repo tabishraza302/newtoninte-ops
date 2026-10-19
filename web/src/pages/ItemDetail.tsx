@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect, useMemo } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import {
   useItem,
@@ -15,7 +15,7 @@ import { ApiError } from '../api/client'
 import { useOptionalAuth } from '../auth/AuthContext'
 import { ActivityTimeline } from '../components/ActivityTimeline'
 import { ItemForm } from '../components/ItemForm'
-import type { Role, Status, UserSummary } from '../api/types'
+import type { ActivityEvent, Role, Status, UserSummary } from '../api/types'
 import { commonStyles, theme, getStatusBadgeStyle, getPriorityBadgeStyle, getApiErrorMessage } from '../theme'
 
 export interface ItemDetailProps {
@@ -104,7 +104,22 @@ export function ItemDetail({
   // Comments state
   const [commentText, setCommentText] = useState('')
   const [commentError, setCommentError] = useState<string | null>(null)
+  const [commentSuccess, setCommentSuccess] = useState<string | null>(null)
 
+  const allActivityEvents = useMemo(() => {
+    if (!activityQuery.data?.pages) return []
+    const seen = new Set<number>()
+    const accumulated: ActivityEvent[] = []
+    for (const page of activityQuery.data.pages) {
+      for (const event of page.events) {
+        if (!seen.has(event.id)) {
+          seen.add(event.id)
+          accumulated.push(event)
+        }
+      }
+    }
+    return accumulated
+  }, [activityQuery.data?.pages])
   const [transitionReason, setTransitionReason] = useState('')
 
   const claimMutation = useClaimItem()
@@ -336,6 +351,7 @@ export function ItemDetail({
         id: item.id,
         to,
         ...(effectiveReason ? { reason: effectiveReason } : {}),
+        expectedVersion: item.version,
       })
       setTransitionReason('')
     } catch (err) {
@@ -369,6 +385,7 @@ export function ItemDetail({
   const handleAddCommentSubmit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault()
     setCommentError(null)
+    setCommentSuccess(null)
     const trimmed = commentText.trim()
     if (!trimmed) return
 
@@ -378,11 +395,11 @@ export function ItemDetail({
         body: trimmed,
       })
       setCommentText('')
+      setCommentSuccess('Comment posted.')
     } catch (err) {
       setCommentError(getApiErrorMessage(err, 'Failed to post comment.'))
     }
   }
-
   const hasTransitions = Boolean(
     canStart || canSubmitForApproval || canApprove || canSendBack || canClose || canReopen || canCancel
   )
@@ -653,6 +670,40 @@ export function ItemDetail({
                       {commentError}
                     </div>
                   )}
+                  {commentSuccess && (
+                    <div
+                      role="status"
+                      style={{
+                        padding: '0.75rem 1rem',
+                        backgroundColor: '#f0fdf4',
+                        border: '1px solid #bbf7d0',
+                        borderRadius: '6px',
+                        color: '#166534',
+                        fontSize: '0.875rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '0.5rem',
+                        marginBottom: '0.75rem',
+                      }}
+                    >
+                      <span>{commentSuccess}</span>
+                      {activityQuery.hasNextPage && (
+                        <button
+                          type="button"
+                          onClick={() => activityQuery.fetchNextPage()}
+                          disabled={activityQuery.isFetchingNextPage}
+                          style={{
+                            ...commonStyles.buttonSecondary,
+                            padding: '0.25rem 0.5rem',
+                            fontSize: '0.75rem',
+                          }}
+                        >
+                          {activityQuery.isFetchingNextPage ? 'Loading latest activity…' : 'Load more activity to see latest comments'}
+                        </button>
+                      )}
+                    </div>
+                  )}
                   <div
                     style={{
                       ...commonStyles.cardPadded,
@@ -674,7 +725,11 @@ export function ItemDetail({
                       maxLength={10000}
                       placeholder="Share operational updates, questions, or handoff notes…"
                       value={commentText}
-                      onChange={(e) => setCommentText(e.target.value)}
+                      onChange={(e) => {
+                        setCommentText(e.target.value)
+                        if (commentSuccess) setCommentSuccess(null)
+                        if (commentError) setCommentError(null)
+                      }}
                       style={{
                         ...commonStyles.input,
                         minHeight: '90px',
@@ -721,10 +776,80 @@ export function ItemDetail({
               <h2 style={{ fontSize: '1.125rem', fontWeight: 700, color: theme.colors.textPrimary, marginBottom: '0.875rem' }}>
                 Activity & Audit Log
               </h2>
-              <ActivityTimeline
-                events={activityQuery.data?.events ?? []}
-                isLoading={activityQuery.isLoading}
-              />
+              {activityQuery.isError && allActivityEvents.length === 0 ? (
+                <div
+                  role="alert"
+                  data-testid="activity-error"
+                  style={{
+                    ...commonStyles.alertError,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '1rem',
+                  }}
+                >
+                  <span>{getApiErrorMessage(activityQuery.error, 'Failed to load activity history.')}</span>
+                  <button
+                    type="button"
+                    onClick={() => activityQuery.refetch()}
+                    style={{ ...commonStyles.buttonSecondary, padding: '0.35rem 0.75rem' }}
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <ActivityTimeline
+                    events={allActivityEvents}
+                    isLoading={activityQuery.isLoading}
+                  />
+
+                  {/* Next Page Failure Alert */}
+                  {activityQuery.isFetchNextPageError && (
+                    <div
+                      role="alert"
+                      data-testid="activity-next-error"
+                      style={{
+                        ...commonStyles.alertError,
+                        marginTop: '0.75rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '1rem',
+                      }}
+                    >
+                      <span>{getApiErrorMessage(activityQuery.error, 'Failed to load more activity.')}</span>
+                      <button
+                        type="button"
+                        onClick={() => activityQuery.fetchNextPage()}
+                        style={{ ...commonStyles.buttonSecondary, padding: '0.35rem 0.75rem' }}
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Load More Activity Button */}
+                  {activityQuery.hasNextPage && (
+                    <div style={{ display: 'flex', justifyContent: 'center', marginTop: '1rem' }}>
+                      <button
+                        type="button"
+                        data-testid="load-more-activity-button"
+                        onClick={() => activityQuery.fetchNextPage()}
+                        disabled={activityQuery.isFetchingNextPage}
+                        style={{
+                          ...commonStyles.buttonSecondary,
+                          minWidth: '140px',
+                          opacity: activityQuery.isFetchingNextPage ? 0.7 : 1,
+                          cursor: activityQuery.isFetchingNextPage ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        {activityQuery.isFetchingNextPage ? 'Loading more activity…' : 'Load more activity'}
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
             </section>
           </main>
 

@@ -156,7 +156,7 @@ export function ItemList(): React.ReactElement {
             id="search-input"
             type="search"
             aria-label="Search"
-            placeholder="Search titles and descriptions…"
+            placeholder="Search titles…"
             value={qParam}
             onChange={(e) => updateParam('q', e.target.value)}
             style={commonStyles.input}

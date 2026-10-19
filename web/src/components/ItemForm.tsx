@@ -73,6 +73,12 @@ export function ItemForm({
 
   const [stableIdempotencyKey] = useState<string>(() => propKey ?? generateIdempotencyKey())
 
+  // Freeze edit-session baseline (fields, id, version) together.
+  // If item.id changes (reopened with new item) or edit session starts/ends, reset baseline and draft fields.
+  // If parent refetches same item (same id, bumped version/fields), draft fields and baseline remain frozen.
+  const [baseline, setBaseline] = useState<WorkItem | undefined>(() => item)
+  const [prevItemId, setPrevItemId] = useState<number | undefined>(() => item?.id)
+
   const [title, setTitle] = useState(item?.title ?? '')
   const [description, setDescription] = useState(item?.description ?? '')
   const [type, setType] = useState<ItemType>(item?.type ?? 'task')
@@ -80,47 +86,59 @@ export function ItemForm({
   const [dueDate, setDueDate] = useState(item?.dueAt ? item.dueAt.slice(0, 10) : '')
   const [selectedAssigneeId, setSelectedAssigneeId] = useState<number | null>(item?.assigneeId ?? null)
 
-  const teamMembersQuery = useInfiniteTeamMembers(teamId, { limit: 20, enabled: !isEditing && !isMember })
-  const teamMembers = teamMembersQuery.data?.pages.flatMap((page) => page.members) ?? []
-
   const [versionConflict, setVersionConflict] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const teamMembersQuery = useInfiniteTeamMembers(teamId, { limit: 20, enabled: !isEditing && !isMember })
+  const teamMembers = teamMembersQuery.data?.pages.flatMap((page) => page.members) ?? []
   const createMutation = useCreateItem()
   const patchMutation = usePatchItem()
 
-  const isSubmitting = createMutation.isPending || patchMutation.isPending
+  // Reset baseline and form state during render if switching to a different item
+  if (item?.id !== prevItemId) {
+    setPrevItemId(item?.id)
+    setBaseline(item)
+    setTitle(item?.title ?? '')
+    setDescription(item?.description ?? '')
+    setType(item?.type ?? 'task')
+    setPriority(item?.priority ?? 'medium')
+    setDueDate(item?.dueAt ? item.dueAt.slice(0, 10) : '')
+    setSelectedAssigneeId(item?.assigneeId ?? null)
+    setVersionConflict(false)
+    setErrorMessage(null)
+  }
 
+  const isSubmitting = createMutation.isPending || patchMutation.isPending
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>): Promise<void> => {
     e.preventDefault()
     setErrorMessage(null)
     setVersionConflict(false)
 
-    if (isEditing && item) {
+    if (isEditing && baseline) {
       const patchData: PatchItemInput = {
-        version: item.version,
+        version: baseline.version,
       }
 
-      if (title !== item.title) {
+      if (title !== baseline.title) {
         patchData.title = title
       }
-      const initialDesc = item.description ?? ''
-      if (description !== initialDesc) {
+      const baselineDesc = baseline.description ?? ''
+      if (description !== baselineDesc) {
         patchData.description = description || null
       }
-      if (type !== item.type) {
+      if (type !== baseline.type) {
         patchData.type = type
       }
-      if (!isMember && priority !== item.priority) {
+      if (!isMember && priority !== baseline.priority) {
         patchData.priority = priority
       }
-      const initialDue = item.dueAt ? item.dueAt.slice(0, 10) : ''
-      if (dueDate !== initialDue) {
+      const baselineDue = baseline.dueAt ? baseline.dueAt.slice(0, 10) : ''
+      if (dueDate !== baselineDue) {
         patchData.dueAt = dueDate ? new Date(dueDate).toISOString() : null
       }
 
       try {
         const res = await patchMutation.mutateAsync({
-          id: item.id,
+          id: baseline.id,
           data: patchData,
         })
         onSuccess?.(res.item)

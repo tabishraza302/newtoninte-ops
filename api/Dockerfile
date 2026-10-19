@@ -2,7 +2,7 @@
 
 # Build context is the repository root (see docker-compose.yml) because this is
 # a Bun workspace: the lockfile and tsconfig.base.json live at the root.
-FROM oven/bun:1-alpine
+FROM oven/bun:1.4.3-alpine
 
 WORKDIR /app
 

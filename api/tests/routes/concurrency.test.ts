@@ -1,9 +1,9 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import request from 'supertest'
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import { createApp } from '../../src/app'
 import { closeDb, db } from '../../src/db/client'
-import { notifications, workItems } from '../../src/db/schema'
+import { memberships, notifications, workItems } from '../../src/db/schema'
 import { resetDb, seedItem, seedMembership, seedTeam, seedUser } from '../helpers/db'
 import { signAccessToken } from '../../src/services/tokens'
 
@@ -357,5 +357,132 @@ describe('Concurrency & Workflow routes (§13)', () => {
 
     expect(itemsInDb).toHaveLength(1)
     expect(itemsInDb[0]?.id).toBe(body1.item.id)
+  })
+
+  it('(g) §13 Authorization: viewer cannot increment version/timestamp via version-only PATCH', async () => {
+    const team = await seedTeam()
+    const lead = await seedUser()
+    const viewer = await seedUser()
+    const member = await seedUser()
+    await seedMembership(lead.id, team.id, 'lead')
+    await seedMembership(viewer.id, team.id, 'viewer')
+    await seedMembership(member.id, team.id, 'member')
+
+    const item = await seedItem(team.id, {
+      title: 'Protected item',
+      status: 'open',
+      version: 1,
+      createdBy: lead.id,
+    })
+
+    const viewerToken = await signAccessToken(viewer.id)
+    const memberToken = await signAccessToken(member.id)
+
+    // Viewer version-only PATCH must fail with 403 FORBIDDEN
+    const viewerRes = await request(app)
+      .patch(`/items/${item.id}`)
+      .set('Authorization', `Bearer ${viewerToken}`)
+      .send({ version: 1 })
+
+    expect(viewerRes.status).toBe(403)
+    const viewerBody = viewerRes.body as ErrorResponseBody
+    expect(viewerBody.error).toBeDefined()
+    expect(viewerBody.error.code).toBe('FORBIDDEN')
+
+    const [persistedAfterViewer] = await db
+      .select()
+      .from(workItems)
+      .where(eq(workItems.id, item.id))
+      .limit(1)
+
+    expect(persistedAfterViewer?.version).toBe(1)
+    expect(persistedAfterViewer?.updatedAt.getTime()).toBe(item.updatedAt.getTime())
+
+    // Member version-only PATCH succeeds
+    const memberRes = await request(app)
+      .patch(`/items/${item.id}`)
+      .set('Authorization', `Bearer ${memberToken}`)
+      .send({ version: 1 })
+
+    expect(memberRes.status).toBe(200)
+    const memberBody = memberRes.body as ItemResponseBody
+    expect(memberBody.item.version).toBe(2)
+  })
+
+  it('(h) §13 Idempotency replay authz: removed or demoted actor cannot retrieve or create item via cached receipt', async () => {
+    const team = await seedTeam()
+    const user = await seedUser()
+    await seedMembership(user.id, team.id, 'member')
+    const token = await signAccessToken(user.id)
+
+    const key = `idem-replay-authz-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const payload = {
+      teamId: team.id,
+      title: 'Original Keyed Item',
+      type: 'task',
+      priority: 'medium',
+    }
+
+    // 1. Initial creation succeeds and caches receipt
+    const res1 = await request(app)
+      .post('/items')
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', key)
+      .send(payload)
+
+    expect(res1.status).toBe(201)
+    const body1 = res1.body as ItemResponseBody
+    expect(body1.item.id).toBeDefined()
+
+    // 2. Demote user to viewer -> replay must be rejected with 403 FORBIDDEN
+    await db
+      .update(memberships)
+      .set({ role: 'viewer' })
+      .where(and(eq(memberships.userId, user.id), eq(memberships.teamId, team.id)))
+
+    const demotedRes = await request(app)
+      .post('/items')
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', key)
+      .send(payload)
+
+    expect(demotedRes.status).toBe(403)
+    const demotedBody = demotedRes.body as ErrorResponseBody
+    expect(demotedBody.error.code).toBe('FORBIDDEN')
+
+    // 3. Remove user from team entirely -> replay must be rejected with 404 NOT_FOUND
+    await db
+      .delete(memberships)
+      .where(and(eq(memberships.userId, user.id), eq(memberships.teamId, team.id)))
+
+    const removedRes = await request(app)
+      .post('/items')
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', key)
+      .send(payload)
+
+    expect(removedRes.status).toBe(404)
+    const removedBody = removedRes.body as ErrorResponseBody
+    expect(removedBody.error.code).toBe('NOT_FOUND')
+
+    // 4. Restore membership as member -> replay returns original receipt without creating new item
+    await seedMembership(user.id, team.id, 'member')
+
+    const replayedRes = await request(app)
+      .post('/items')
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', key)
+      .send(payload)
+
+    expect(replayedRes.status).toBe(201)
+    const replayedBody = replayedRes.body as ItemResponseBody
+    expect(replayedBody.item.id).toBe(body1.item.id)
+
+    const allItems = await db
+      .select()
+      .from(workItems)
+      .where(eq(workItems.teamId, team.id))
+
+    expect(allItems).toHaveLength(1)
   })
 })
