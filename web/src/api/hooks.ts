@@ -133,11 +133,12 @@ export function useTeams(
   })
 }
 
-export function useMe(): UseQueryResult<MeResponse, Error> {
+export function useMe(opts?: { enabled?: boolean }): UseQueryResult<MeResponse, Error> {
   return useQuery<MeResponse, Error>({
     queryKey: ['auth-me'],
     queryFn: () => apiFetch<MeResponse>('/auth/me'),
     retry: false,
+    enabled: opts?.enabled ?? true,
   })
 }
 
@@ -261,15 +262,20 @@ export interface TransitionItemContext {
 export function useTransitionItem(): UseMutationResult<
   ItemResponse,
   Error,
-  { id: number; to: Status; reason?: string | undefined },
+  { id: number; to: Status; reason?: string | undefined; expectedVersion?: number | undefined },
   TransitionItemContext
 > {
   const queryClient = useQueryClient()
-  return useMutation<ItemResponse, Error, { id: number; to: Status; reason?: string | undefined }, TransitionItemContext>({
-    mutationFn: async ({ id, to, reason }) => {
+  return useMutation<
+    ItemResponse,
+    Error,
+    { id: number; to: Status; reason?: string | undefined; expectedVersion?: number | undefined },
+    TransitionItemContext
+  >({
+    mutationFn: async ({ id, to, reason, expectedVersion }) => {
       return apiFetch<ItemResponse>(`/items/${id}/transition`, {
         method: 'POST',
-        json: { to, reason },
+        json: { to, reason, expectedVersion },
       })
     },
     onMutate: async ({ id, to }) => {
@@ -291,10 +297,12 @@ export function useTransitionItem(): UseMutationResult<
         queryClient.setQueryData(['item', id], context.previousItem)
       }
     },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['items'] })
+    },
     onSettled: (_data, _err, { id }) => {
       void queryClient.invalidateQueries({ queryKey: ['item', id] })
       void queryClient.invalidateQueries({ queryKey: ['item-activity', id] })
-      void queryClient.invalidateQueries({ queryKey: ['items'] })
     },
   })
 }

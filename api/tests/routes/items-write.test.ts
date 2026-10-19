@@ -507,6 +507,268 @@ describe('Items write routes', () => {
       expect(res.status).toBe(422)
       expect(res.body.error?.code).toBe('INVALID_TRANSITION')
     })
+
+    it('transitions item with matching expectedVersion (returns 200 { item } and version + 1)', async () => {
+      const team = await seedTeam()
+      const user = await seedUser()
+      await seedMembership(user.id, team.id, 'lead')
+      const item = await seedItem(team.id, {
+        status: 'in_progress',
+        assigneeId: user.id,
+        createdBy: user.id,
+        version: 3,
+      })
+      const token = await signAccessToken(user.id)
+
+      const res = await request(app)
+        .post(`/items/${item.id}/transition`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          to: 'awaiting_approval',
+          expectedVersion: 3,
+        })
+
+      expect(res.status).toBe(200)
+      expect(res.body.item).toBeDefined()
+      expect(res.body.item.id).toBe(item.id)
+      expect(res.body.item.status).toBe('awaiting_approval')
+      expect(res.body.item.version).toBe(4)
+    })
+
+    it('returns 409 STALE_STATE on expectedVersion mismatch with item unchanged', async () => {
+      const team = await seedTeam()
+      const user = await seedUser()
+      await seedMembership(user.id, team.id, 'lead')
+      const item = await seedItem(team.id, {
+        status: 'in_progress',
+        assigneeId: user.id,
+        createdBy: user.id,
+        version: 2,
+      })
+      const token = await signAccessToken(user.id)
+
+      const res = await request(app)
+        .post(`/items/${item.id}/transition`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          to: 'awaiting_approval',
+          expectedVersion: 999,
+        })
+
+      expect(res.status).toBe(409)
+      expect(res.body.error?.code).toBe('STALE_STATE')
+
+      // Item remains unchanged in DB
+      const [rows] = await pool.query('SELECT status, version FROM work_items WHERE id = ?', [item.id])
+      const itemRows = rows as Array<{ status: string; version: number }>
+      expect(itemRows[0]?.status).toBe('in_progress')
+      expect(itemRows[0]?.version).toBe(2)
+    })
+
+    it('headline hazard: approving awaiting_approval -> resolved with v then returning resolved -> in_progress with stale v returns 409', async () => {
+      const team = await seedTeam()
+      const lead = await seedUser()
+      const member = await seedUser()
+      await seedMembership(lead.id, team.id, 'lead')
+      await seedMembership(member.id, team.id, 'member')
+
+      const item = await seedItem(team.id, {
+        status: 'awaiting_approval',
+        assigneeId: member.id,
+        createdBy: member.id,
+        version: 4,
+      })
+      const leadToken = await signAccessToken(lead.id)
+      const staleVersion = item.version
+
+      // First action: Lead approves item (awaiting_approval -> resolved) with expectedVersion 4
+      const approveRes = await request(app)
+        .post(`/items/${item.id}/transition`)
+        .set('Authorization', `Bearer ${leadToken}`)
+        .send({
+          to: 'resolved',
+          reason: 'Looks great!',
+          expectedVersion: staleVersion,
+        })
+
+      expect(approveRes.status).toBe(200)
+      expect(approveRes.body.item.status).toBe('resolved')
+      expect(approveRes.body.item.version).toBe(5)
+
+      // Second action: Stale action dialog sends return for revisions (resolved -> in_progress) with stale expectedVersion 4
+      const returnRes = await request(app)
+        .post(`/items/${item.id}/transition`)
+        .set('Authorization', `Bearer ${leadToken}`)
+        .send({
+          to: 'in_progress',
+          reason: 'Return for revisions',
+          expectedVersion: staleVersion,
+        })
+
+      expect(returnRes.status).toBe(409)
+      expect(returnRes.body.error?.code).toBe('STALE_STATE')
+
+      // Item remains resolved, not reopened
+      const [rows] = await pool.query('SELECT status, version FROM work_items WHERE id = ?', [item.id])
+      const itemRows = rows as Array<{ status: string; version: number }>
+      expect(itemRows[0]?.status).toBe('resolved')
+      expect(itemRows[0]?.version).toBe(5)
+    })
+
+    it('{"to":"resolved","expectedVersion":null} on an awaiting item succeeds (guard treated as absent), version bumps', async () => {
+      const team = await seedTeam()
+      const user = await seedUser()
+      await seedMembership(user.id, team.id, 'lead')
+      const item = await seedItem(team.id, {
+        status: 'awaiting_approval',
+        assigneeId: user.id,
+        createdBy: user.id,
+        version: 3,
+      })
+      const token = await signAccessToken(user.id)
+
+      const res = await request(app)
+        .post(`/items/${item.id}/transition`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          to: 'resolved',
+          expectedVersion: null,
+        })
+
+      expect(res.status).toBe(200)
+      expect(res.body.item).toBeDefined()
+      expect(res.body.item.id).toBe(item.id)
+      expect(res.body.item.status).toBe('resolved')
+      expect(res.body.item.version).toBe(4)
+
+      const [rows] = await pool.query('SELECT status, version FROM work_items WHERE id = ?', [item.id])
+      const itemRows = rows as Array<{ status: string; version: number }>
+      expect(itemRows[0]?.status).toBe('resolved')
+      expect(itemRows[0]?.version).toBe(4)
+    })
+
+    it('{"to":"in_progress","version":<stale>} returns 409 STALE_STATE, and succeeds with current version', async () => {
+      const team = await seedTeam()
+      const user = await seedUser()
+      await seedMembership(user.id, team.id, 'lead')
+      const item = await seedItem(team.id, {
+        status: 'open',
+        assigneeId: user.id,
+        createdBy: user.id,
+        version: 2,
+      })
+      const token = await signAccessToken(user.id)
+
+      // Stale version alias returns 409 STALE_STATE
+      const staleRes = await request(app)
+        .post(`/items/${item.id}/transition`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          to: 'in_progress',
+          version: 999,
+        })
+
+      expect(staleRes.status).toBe(409)
+      expect(staleRes.body.error?.code).toBe('STALE_STATE')
+
+      // Item remains unchanged in DB
+      const [staleRows] = await pool.query('SELECT status, version FROM work_items WHERE id = ?', [item.id])
+      const staleItemRows = staleRows as Array<{ status: string; version: number }>
+      expect(staleItemRows[0]?.status).toBe('open')
+      expect(staleItemRows[0]?.version).toBe(2)
+
+      // With current version succeeds
+      const currentRes = await request(app)
+        .post(`/items/${item.id}/transition`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          to: 'in_progress',
+          version: 2,
+        })
+
+      expect(currentRes.status).toBe(200)
+      expect(currentRes.body.item.status).toBe('in_progress')
+      expect(currentRes.body.item.version).toBe(3)
+
+      const [currentRows] = await pool.query('SELECT status, version FROM work_items WHERE id = ?', [item.id])
+      const currentItemRows = currentRows as Array<{ status: string; version: number }>
+      expect(currentItemRows[0]?.status).toBe('in_progress')
+      expect(currentItemRows[0]?.version).toBe(3)
+    })
+
+    it('If-Match: "<stale>" returns 409 STALE_STATE, and succeeds with current version', async () => {
+      const team = await seedTeam()
+      const user = await seedUser()
+      await seedMembership(user.id, team.id, 'lead')
+      const item = await seedItem(team.id, {
+        status: 'open',
+        assigneeId: user.id,
+        createdBy: user.id,
+        version: 4,
+      })
+      const token = await signAccessToken(user.id)
+
+      // Stale If-Match returns 409 STALE_STATE
+      const staleRes = await request(app)
+        .post(`/items/${item.id}/transition`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('If-Match', '"999"')
+        .send({
+          to: 'in_progress',
+        })
+
+      expect(staleRes.status).toBe(409)
+      expect(staleRes.body.error?.code).toBe('STALE_STATE')
+
+      // Current version with W/ prefix and quotes succeeds
+      const currentRes = await request(app)
+        .post(`/items/${item.id}/transition`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('If-Match', 'W/"4"')
+        .send({
+          to: 'in_progress',
+        })
+
+      expect(currentRes.status).toBe(200)
+      expect(currentRes.body.item.status).toBe('in_progress')
+      expect(currentRes.body.item.version).toBe(5)
+    })
+
+    it.each([
+      ['"0"', '0'],
+      ['-1', -1],
+      ['1.5', 1.5],
+      ['true', true],
+      ['false', false],
+      ['"abc"', 'abc'],
+    ])('rejects invalid expectedVersion value %s with 422 VALIDATION_ERROR and leaves item unchanged', async (_label, invalidVal) => {
+      const team = await seedTeam()
+      const user = await seedUser()
+      await seedMembership(user.id, team.id, 'lead')
+      const item = await seedItem(team.id, {
+        status: 'in_progress',
+        assigneeId: user.id,
+        createdBy: user.id,
+        version: 2,
+      })
+      const token = await signAccessToken(user.id)
+
+      const res = await request(app)
+        .post(`/items/${item.id}/transition`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          to: 'awaiting_approval',
+          expectedVersion: invalidVal,
+        })
+
+      expect(res.status).toBe(422)
+      expect(res.body.error?.code).toBe('VALIDATION_ERROR')
+
+      const [rows] = await pool.query('SELECT status, version FROM work_items WHERE id = ?', [item.id])
+      const itemRows = rows as Array<{ status: string; version: number }>
+      expect(itemRows[0]?.status).toBe('in_progress')
+      expect(itemRows[0]?.version).toBe(2)
+    })
   })
 
   describe('POST /items/:id/comments', () => {

@@ -300,16 +300,49 @@ itemsRouter.post('/items/:id/assign', requireAuth(), async (req: Request, res: R
     next(err)
   }
 })
+// Reads the optional version precondition from body expectedVersion -> body version -> If-Match header.
+// Matches POST /items/:id/assign's input shapes; the difference is optionality (absent, null, or '' disables the guard).
+function readVersionPrecondition(req: Request): number | undefined {
+  const ifMatchHeader = Array.isArray(req.headers['if-match'])
+    ? req.headers['if-match'][0]
+    : req.headers['if-match']
+  const ifMatchVersion = ifMatchHeader?.replace(/^W\//, '').replace(/["']/g, '').trim()
+  const rawVersion =
+    req.body && typeof req.body === 'object' && ('expectedVersion' in req.body || 'version' in req.body)
+      ? (req.body.expectedVersion ?? req.body.version)
+      : ifMatchVersion && ifMatchVersion.length > 0
+        ? ifMatchVersion
+        : undefined
+
+  if (rawVersion === undefined || rawVersion === null || rawVersion === '') {
+    return undefined
+  }
+
+  if (typeof rawVersion === 'number') {
+    if (Number.isSafeInteger(rawVersion) && rawVersion > 0) {
+      return rawVersion
+    }
+  } else if (typeof rawVersion === 'string') {
+    const trimmed = rawVersion.trim()
+    if (/^[1-9]\d*$/.test(trimmed)) {
+      const parsed = Number(trimmed)
+      if (Number.isSafeInteger(parsed) && parsed > 0) {
+        return parsed
+      }
+    }
+  }
+
+  throw ApiError.of('VALIDATION_ERROR', 'expectedVersion must be a positive integer')
+}
 
 // POST /items/:id/transition
 itemsRouter.post('/items/:id/transition', requireAuth(), async (req: Request, res: Response, next) => {
   try {
     const actor = currentActor(req)
     const { id } = parse(itemIdParamSchema, req.params)
+    const expectedVersion = readVersionPrecondition(req)
     const { to, reason } = parse(transitionItemBodySchema, req.body)
-    const item = reason !== undefined
-      ? await transitionItem(actor, id, to, reason)
-      : await transitionItem(actor, id, to)
+    const item = await transitionItem(actor, id, to, reason, expectedVersion)
     res.status(200).json({ item })
   } catch (err) {
     next(err)

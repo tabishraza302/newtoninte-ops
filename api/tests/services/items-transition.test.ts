@@ -502,4 +502,159 @@ describe('items service - transitionItem (Task 4.7)', () => {
     expect(notifs).toHaveLength(1)
     expect(notifs[0]?.type).toBe('workflow_decision')
   })
+
+  it('stale expectedVersion throws 409 STALE_STATE with item status and version unchanged', async () => {
+    const lead = await seedUser()
+    const team = await seedTeam()
+    await seedMembership(lead.id, team.id, 'lead')
+
+    const item = await seedItem(team.id, {
+      createdBy: lead.id,
+      assigneeId: lead.id,
+      status: 'awaiting_approval',
+      version: 2,
+    })
+
+    let caughtError: unknown
+    try {
+      await transitionItem({ id: lead.id, isAdmin: false }, item.id, 'resolved', undefined, 1)
+    } catch (e) {
+      caughtError = e
+    }
+
+    expect(caughtError).toBeInstanceOf(ApiError)
+    const err = caughtError as ApiError
+    expect(err.code).toBe('STALE_STATE')
+    expect(err.status).toBe(409)
+
+    const [current] = await db.select().from(workItems).where(eq(workItems.id, item.id)).limit(1)
+    expect(current?.status).toBe('awaiting_approval')
+    expect(current?.version).toBe(2)
+  })
+
+  it('matching expectedVersion succeeds and bumps version by 1', async () => {
+    const lead = await seedUser()
+    const team = await seedTeam()
+    await seedMembership(lead.id, team.id, 'lead')
+
+    const item = await seedItem(team.id, {
+      createdBy: lead.id,
+      assigneeId: lead.id,
+      status: 'awaiting_approval',
+      version: 3,
+    })
+
+    const updated = await transitionItem(
+      { id: lead.id, isAdmin: false },
+      item.id,
+      'resolved',
+      undefined,
+      3,
+    )
+
+    expect(updated.status).toBe('resolved')
+    expect(updated.version).toBe(4)
+
+    const [current] = await db.select().from(workItems).where(eq(workItems.id, item.id)).limit(1)
+    expect(current?.status).toBe('resolved')
+    expect(current?.version).toBe(4)
+  })
+
+  it('omitted expectedVersion still works without version check', async () => {
+    const lead = await seedUser()
+    const team = await seedTeam()
+    await seedMembership(lead.id, team.id, 'lead')
+
+    const item = await seedItem(team.id, {
+      createdBy: lead.id,
+      assigneeId: lead.id,
+      status: 'awaiting_approval',
+      version: 5,
+    })
+
+    const updated = await transitionItem(
+      { id: lead.id, isAdmin: false },
+      item.id,
+      'resolved',
+    )
+
+    expect(updated.status).toBe('resolved')
+    expect(updated.version).toBe(6)
+  })
+  it('explicit undefined expectedVersion bypasses version check and bumps version', async () => {
+    const lead = await seedUser()
+    const team = await seedTeam()
+    await seedMembership(lead.id, team.id, 'lead')
+
+    const item = await seedItem(team.id, {
+      createdBy: lead.id,
+      assigneeId: lead.id,
+      status: 'awaiting_approval',
+      version: 5,
+    })
+
+    const updated = await transitionItem(
+      { id: lead.id, isAdmin: false },
+      item.id,
+      'resolved',
+      undefined,
+      undefined,
+    )
+
+    expect(updated.status).toBe('resolved')
+    expect(updated.version).toBe(6)
+  })
+
+
+  it('headline hazard: approving awaiting_approval -> resolved with v then returning resolved -> in_progress with stale v throws 409', async () => {
+    const lead = await seedUser()
+    const member = await seedUser()
+    const team = await seedTeam()
+    await seedMembership(lead.id, team.id, 'lead')
+    await seedMembership(member.id, team.id, 'member')
+
+    const item = await seedItem(team.id, {
+      createdBy: member.id,
+      assigneeId: member.id,
+      status: 'awaiting_approval',
+      version: 4,
+    })
+
+    const staleVersion = item.version
+
+    // Someone approves the item: awaiting_approval -> resolved with expectedVersion = 4
+    const approved = await transitionItem(
+      { id: lead.id, isAdmin: false },
+      item.id,
+      'resolved',
+      'Looks good',
+      staleVersion,
+    )
+    expect(approved.status).toBe('resolved')
+    expect(approved.version).toBe(5)
+
+    // Stale action confirming "Return for revisions": resolved -> in_progress using the stale version
+    let caughtError: unknown
+    try {
+      await transitionItem(
+        { id: lead.id, isAdmin: false },
+        item.id,
+        'in_progress',
+        'Needs more tests',
+        staleVersion,
+      )
+    } catch (e) {
+      caughtError = e
+    }
+
+    expect(caughtError).toBeInstanceOf(ApiError)
+    const err = caughtError as ApiError
+    expect(err.code).toBe('STALE_STATE')
+    expect(err.status).toBe(409)
+
+    // Item remains resolved at version 5, not reopened into in_progress
+    const [current] = await db.select().from(workItems).where(eq(workItems.id, item.id)).limit(1)
+    expect(current?.status).toBe('resolved')
+    expect(current?.version).toBe(5)
+  })
 })

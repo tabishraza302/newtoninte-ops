@@ -922,6 +922,7 @@ export async function transitionItem(
   id: number,
   to: Status,
   reason?: string,
+  expectedVersion?: number,
 ): Promise<WorkItemRow> {
   if (reason !== undefined) {
     if (typeof reason !== 'string' || reason.length > 10000 || Buffer.byteLength(reason, 'utf8') > 65535) {
@@ -988,6 +989,10 @@ export async function transitionItem(
       throw ApiError.of('STALE_STATE', 'Item status has changed')
     }
 
+    if (expectedVersion !== undefined && locked.version !== expectedVersion) {
+      throw ApiError.of('STALE_STATE', 'Item version conflict or stale state')
+    }
+
     const currentActorRole = await roleIn(actor.id, locked.teamId, tx)
     if (currentActorRole === null) {
       throw ApiError.of('NOT_FOUND')
@@ -1028,7 +1033,13 @@ export async function transitionItem(
         version: sql`version + 1`,
         updatedAt: sql`CURRENT_TIMESTAMP(3)`,
       })
-      .where(and(eq(workItems.id, id), eq(workItems.status, existing.status)))
+      .where(
+        and(
+          eq(workItems.id, id),
+          eq(workItems.status, existing.status),
+          ...(expectedVersion !== undefined ? [eq(workItems.version, expectedVersion)] : []),
+        ),
+      )
 
     if (result.affectedRows === 0) {
       throw ApiError.of('STALE_STATE', 'Item status has changed')

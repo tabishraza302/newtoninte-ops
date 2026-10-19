@@ -1,7 +1,7 @@
 import React from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { useOptionalAuth } from '../auth/AuthContext'
-import { useNotificationsSummary } from '../api/hooks'
+import { useNotificationsSummary, useMe } from '../api/hooks'
 import { theme } from '../theme'
 export interface AppLayoutProps {
   children: React.ReactNode
@@ -13,6 +13,8 @@ export function AppLayout({ children }: AppLayoutProps): React.ReactElement {
   const user = auth?.user
   const isAdmin = !!user?.isAdmin
   const authedUserId = auth?.status === 'authed' ? auth.user?.id : undefined
+  const { data: meData } = useMe({ enabled: !!authedUserId })
+  const isLead = !isAdmin && (meData?.memberships?.some((m) => m.role === 'lead') ?? false)
   const { data: summary, isError: isSummaryError } = useNotificationsSummary(authedUserId)
   const [isMobileMenuOpen, setIsMobileMenuOpen] = React.useState(false)
   const [isMobile, setIsMobile] = React.useState(() => {
@@ -120,6 +122,7 @@ export function AppLayout({ children }: AppLayoutProps): React.ReactElement {
     if (path === '/admin/users') return location.pathname === '/admin/users'
     if (path === '/admin/teams') return location.pathname === '/admin/teams'
     if (path === '/admin/audit-log') return location.pathname === '/admin/audit-log'
+    if (path === '/approvals') return location.pathname === '/approvals'
     if (path === '/dashboard') {
       return location.pathname === '/dashboard' || (!isAdmin && location.pathname === '/')
     }
@@ -146,6 +149,9 @@ export function AppLayout({ children }: AppLayoutProps): React.ReactElement {
     if (location.pathname === '/admin/audit-log') {
       return 'System Administration / Audit Log'
     }
+    if (location.pathname === '/approvals') {
+      return 'Operations / Approvals Queue'
+    }
     if (location.pathname === '/' || location.pathname === '/dashboard') {
       return 'Triage / Dashboard'
     }
@@ -162,17 +168,106 @@ export function AppLayout({ children }: AppLayoutProps): React.ReactElement {
   }
 
   return (
-    <div style={{ display: 'flex', minHeight: '100vh', backgroundColor: theme.colors.bgApp, color: theme.colors.textPrimary, width: '100%' }}>
+    <div className="app-layout-root" style={{ display: 'flex', height: '100vh', width: '100%', overflow: 'hidden', backgroundColor: theme.colors.bgApp, color: theme.colors.textPrimary }}>
       <style>{`
+        .app-layout-root {
+          display: flex;
+          height: 100vh;
+          height: 100dvh;
+          max-height: 100vh;
+          max-height: 100dvh;
+          width: 100%;
+          overflow: hidden;
+        }
+        .app-main-column {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          min-width: 0;
+          height: 100%;
+          overflow-y: auto;
+          overflow-x: hidden;
+        }
         .app-layout-sidebar {
           width: 260px;
+          height: 100vh;
+          height: 100dvh;
+          max-height: 100vh;
+          max-height: 100dvh;
+          position: sticky;
+          top: 0;
           background-color: #11161d;
           color: #ffffff;
           display: flex;
           flex-direction: column;
           border-right: 1px solid #1e293b;
           flex-shrink: 0;
+          box-sizing: border-box;
+          overflow: hidden;
           transition: transform 0.2s ease-in-out;
+        }
+        .app-sidebar-nav {
+          scrollbar-width: thin;
+          scrollbar-color: #334155 transparent;
+        }
+        .app-sidebar-nav::-webkit-scrollbar {
+          width: 6px;
+        }
+        .app-sidebar-nav::-webkit-scrollbar-track {
+          background: transparent;
+        }
+        .app-sidebar-nav::-webkit-scrollbar-thumb {
+          background: #334155;
+          border-radius: 3px;
+        }
+        .app-sidebar-nav::-webkit-scrollbar-thumb:hover {
+          background: #475569;
+        }
+        .app-sidebar-action-btn {
+          position: relative;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 0.5rem;
+          padding: 0.625rem 0.75rem;
+          border-radius: 6px;
+          font-size: 0.8125rem;
+          font-weight: 600;
+          color: #ffffff;
+          background-color: #0f766e;
+          border: 1px solid #0f766e;
+          text-decoration: none;
+          box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.25);
+          transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
+          outline: none;
+        }
+        .app-sidebar-action-btn:hover {
+          background-color: #115e59 !important;
+          border-color: #115e59 !important;
+          box-shadow: 0 2px 4px 0 rgba(0, 0, 0, 0.35);
+        }
+        .app-sidebar-action-btn:active {
+          background-color: #134e4a !important;
+          border-color: #134e4a !important;
+          transform: translateY(1px);
+        }
+        .app-sidebar-action-btn:focus-visible {
+          outline: 2px solid #5eead4 !important;
+          outline-offset: 2px;
+        }
+        .app-sidebar-nav-link {
+          transition: background-color 0.15s ease, color 0.15s ease;
+        }
+        .app-sidebar-nav-link:hover {
+          color: #ffffff !important;
+          background-color: rgba(255, 255, 255, 0.08) !important;
+        }
+        .app-sidebar-nav-link.active:hover {
+          background-color: #0f766e !important;
+        }
+        .app-sidebar-nav-link:focus-visible {
+          outline: 2px solid #5eead4;
+          outline-offset: 2px;
         }
         .app-mobile-menu-btn {
           display: none;
@@ -197,6 +292,7 @@ export function AppLayout({ children }: AppLayoutProps): React.ReactElement {
           top: 0;
           z-index: 40;
           gap: 0.75rem;
+          flex-shrink: 0;
         }
         .app-breadcrumb-wrap {
           display: flex;
@@ -228,6 +324,10 @@ export function AppLayout({ children }: AppLayoutProps): React.ReactElement {
             top: 0;
             left: 0;
             bottom: 0;
+            height: 100vh;
+            height: 100dvh;
+            max-height: 100vh;
+            max-height: 100dvh;
             z-index: 60;
             transform: translateX(-100%);
             visibility: hidden;
@@ -252,6 +352,12 @@ export function AppLayout({ children }: AppLayoutProps): React.ReactElement {
         }
         @media (min-width: 769px) {
           .app-layout-sidebar {
+            position: sticky;
+            top: 0;
+            height: 100vh;
+            height: 100dvh;
+            max-height: 100vh;
+            max-height: 100dvh;
             visibility: visible !important;
           }
         }
@@ -282,7 +388,7 @@ export function AppLayout({ children }: AppLayoutProps): React.ReactElement {
         aria-hidden={isMobile && !isMobileMenuOpen ? 'true' : undefined}
       >
         {/* Brand */}
-        <div style={{ padding: '1.25rem 1.5rem', borderBottom: '1px solid #1e293b' }}>
+        <div style={{ padding: '1.25rem 1.5rem', borderBottom: '1px solid #1e293b', flexShrink: 0 }}>
           <Link
             to="/"
             style={{
@@ -291,6 +397,7 @@ export function AppLayout({ children }: AppLayoutProps): React.ReactElement {
               gap: '0.75rem',
               textDecoration: 'none',
               color: '#ffffff',
+              minWidth: 0,
             }}
           >
             <div
@@ -305,23 +412,36 @@ export function AppLayout({ children }: AppLayoutProps): React.ReactElement {
                 fontWeight: 800,
                 fontSize: '1rem',
                 color: '#ffffff',
+                flexShrink: 0,
               }}
             >
               N
             </div>
-            <div>
-              <div style={{ fontWeight: 800, fontSize: '0.9375rem', letterSpacing: '-0.02em', lineHeight: 1.2 }}>
+            <div style={{ minWidth: 0, overflow: 'hidden' }}>
+              <div style={{ fontWeight: 800, fontSize: '0.9375rem', letterSpacing: '-0.02em', lineHeight: 1.2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 Newtonite Operations
               </div>
-              <div style={{ fontSize: '0.6875rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                {isAdmin ? 'System Admin' : 'Team Workbench'}
+              <div style={{ fontSize: '0.6875rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {isAdmin ? 'System Admin' : isLead ? 'Team Lead' : 'Team Workbench'}
               </div>
             </div>
           </Link>
         </div>
 
         {/* Navigation Sections */}
-        <div style={{ flex: 1, padding: '1.25rem 0.875rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+        <div
+          className="app-sidebar-nav"
+          style={{
+            flex: 1,
+            minHeight: 0,
+            padding: '1.25rem 0.875rem',
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '1.5rem',
+          }}
+        >
           {isAdmin ? (
               <div>
                 <div style={{ fontSize: '0.6875rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', padding: '0 0.75rem', marginBottom: '0.5rem' }}>
@@ -330,6 +450,7 @@ export function AppLayout({ children }: AppLayoutProps): React.ReactElement {
                 <nav style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
                   <Link
                     to="/admin/jobs"
+                    className={`app-sidebar-nav-link ${isCurrent('/admin/jobs') ? 'active' : ''}`}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
@@ -341,13 +462,13 @@ export function AppLayout({ children }: AppLayoutProps): React.ReactElement {
                       color: isCurrent('/admin/jobs') ? '#ffffff' : '#94a3b8',
                       backgroundColor: isCurrent('/admin/jobs') ? theme.colors.accent : 'transparent',
                       textDecoration: 'none',
-                      transition: 'all 0.15s ease',
                     }}
                   >
                     <span>Outbox Jobs</span>
                   </Link>
                   <Link
                     to="/admin/users"
+                    className={`app-sidebar-nav-link ${isCurrent('/admin/users') ? 'active' : ''}`}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
@@ -359,13 +480,13 @@ export function AppLayout({ children }: AppLayoutProps): React.ReactElement {
                       color: isCurrent('/admin/users') ? '#ffffff' : '#94a3b8',
                       backgroundColor: isCurrent('/admin/users') ? theme.colors.accent : 'transparent',
                       textDecoration: 'none',
-                      transition: 'all 0.15s ease',
                     }}
                   >
                     <span>Users</span>
                   </Link>
                   <Link
                     to="/admin/teams"
+                    className={`app-sidebar-nav-link ${isCurrent('/admin/teams') ? 'active' : ''}`}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
@@ -377,13 +498,13 @@ export function AppLayout({ children }: AppLayoutProps): React.ReactElement {
                       color: isCurrent('/admin/teams') ? '#ffffff' : '#94a3b8',
                       backgroundColor: isCurrent('/admin/teams') ? theme.colors.accent : 'transparent',
                       textDecoration: 'none',
-                      transition: 'all 0.15s ease',
                     }}
                   >
                     <span>Teams</span>
                   </Link>
                   <Link
                     to="/admin/audit-log"
+                    className={`app-sidebar-nav-link ${isCurrent('/admin/audit-log') ? 'active' : ''}`}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
@@ -395,7 +516,6 @@ export function AppLayout({ children }: AppLayoutProps): React.ReactElement {
                       color: isCurrent('/admin/audit-log') ? '#ffffff' : '#94a3b8',
                       backgroundColor: isCurrent('/admin/audit-log') ? theme.colors.accent : 'transparent',
                       textDecoration: 'none',
-                      transition: 'all 0.15s ease',
                     }}
                   >
                     <span>Audit Log</span>
@@ -405,12 +525,39 @@ export function AppLayout({ children }: AppLayoutProps): React.ReactElement {
           ) : (
             <>
               <div>
+                <Link
+                  to="/items/new"
+                  className={`app-sidebar-action-btn ${isCurrent('/items/new') ? 'active' : ''}`}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '0.5rem',
+                    padding: '0.625rem 0.75rem',
+                    borderRadius: '6px',
+                    fontSize: '0.8125rem',
+                    fontWeight: 600,
+                    color: '#ffffff',
+                    backgroundColor: theme.colors.accent,
+                    border: `1px solid ${isCurrent('/items/new') ? '#2dd4bf' : theme.colors.accent}`,
+                    textDecoration: 'none',
+                    boxShadow: isCurrent('/items/new')
+                      ? '0 0 0 1px #2dd4bf, 0 1px 2px 0 rgba(0, 0, 0, 0.25)'
+                      : '0 1px 2px 0 rgba(0, 0, 0, 0.25)',
+                  }}
+                >
+                  <span>+ Create Item</span>
+                </Link>
+              </div>
+
+              <div>
                 <div style={{ fontSize: '0.6875rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', padding: '0 0.75rem', marginBottom: '0.5rem' }}>
                   Operations Views
                 </div>
                 <nav style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
                   <Link
                     to="/dashboard"
+                    className={`app-sidebar-nav-link ${isCurrent('/dashboard') ? 'active' : ''}`}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
@@ -422,14 +569,48 @@ export function AppLayout({ children }: AppLayoutProps): React.ReactElement {
                       color: isCurrent('/dashboard') ? '#ffffff' : '#94a3b8',
                       backgroundColor: isCurrent('/dashboard') ? theme.colors.accent : 'transparent',
                       textDecoration: 'none',
-                      transition: 'all 0.15s ease',
                     }}
                   >
                     <span>Dashboard</span>
                   </Link>
 
+                  {isLead && (
+                    <Link
+                      to="/approvals"
+                      className={`app-sidebar-nav-link ${isCurrent('/approvals') ? 'active' : ''}`}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '0.75rem',
+                        padding: '0.55rem 0.75rem',
+                        borderRadius: '6px',
+                        fontSize: '0.875rem',
+                        fontWeight: isCurrent('/approvals') ? 600 : 500,
+                        color: isCurrent('/approvals') ? '#ffffff' : '#94a3b8',
+                        backgroundColor: isCurrent('/approvals') ? theme.colors.accent : 'transparent',
+                        textDecoration: 'none',
+                      }}
+                    >
+                      <span>Approvals</span>
+                      <span
+                        style={{
+                          fontSize: '0.6875rem',
+                          fontWeight: 700,
+                          padding: '0.1rem 0.45rem',
+                          borderRadius: '9999px',
+                          backgroundColor: isCurrent('/approvals') ? 'rgba(255, 255, 255, 0.25)' : '#1e293b',
+                          color: '#ffffff',
+                        }}
+                      >
+                        Lead
+                      </span>
+                    </Link>
+                  )}
+
                   <Link
                     to="/items"
+                    className={`app-sidebar-nav-link ${isCurrent('/items') ? 'active' : ''}`}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
@@ -441,7 +622,6 @@ export function AppLayout({ children }: AppLayoutProps): React.ReactElement {
                       color: isCurrent('/items') ? '#ffffff' : '#94a3b8',
                       backgroundColor: isCurrent('/items') ? theme.colors.accent : 'transparent',
                       textDecoration: 'none',
-                      transition: 'all 0.15s ease',
                     }}
                   >
                     <span>Work Items</span>
@@ -449,6 +629,7 @@ export function AppLayout({ children }: AppLayoutProps): React.ReactElement {
 
                   <Link
                     to="/teams"
+                    className={`app-sidebar-nav-link ${isCurrent('/teams') ? 'active' : ''}`}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
@@ -460,36 +641,11 @@ export function AppLayout({ children }: AppLayoutProps): React.ReactElement {
                       color: isCurrent('/teams') ? '#ffffff' : '#94a3b8',
                       backgroundColor: isCurrent('/teams') ? theme.colors.accent : 'transparent',
                       textDecoration: 'none',
-                      transition: 'all 0.15s ease',
                     }}
                   >
                     <span>Teams</span>
                   </Link>
                 </nav>
-              </div>
-
-              <div>
-                <div style={{ fontSize: '0.6875rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', padding: '0 0.75rem', marginBottom: '0.5rem' }}>
-                  Actions
-                </div>
-                <Link
-                  to="/items/new"
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.5rem',
-                    padding: '0.5rem 0.75rem',
-                    borderRadius: '6px',
-                    fontSize: '0.8125rem',
-                    fontWeight: 600,
-                    color: theme.colors.accent,
-                    backgroundColor: theme.colors.accentSubtle,
-                    border: `1px solid ${theme.colors.accentBorder}`,
-                    textDecoration: 'none',
-                  }}
-                >
-                  <span>+ Create Item</span>
-                </Link>
               </div>
             </>
           )}
@@ -506,9 +662,10 @@ export function AppLayout({ children }: AppLayoutProps): React.ReactElement {
               alignItems: 'center',
               justifyContent: 'space-between',
               gap: '0.75rem',
+              flexShrink: 0,
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', minWidth: 0, flex: 1 }}>
               <div
                 style={{
                   width: '32px',
@@ -526,12 +683,15 @@ export function AppLayout({ children }: AppLayoutProps): React.ReactElement {
               >
                 {user.displayName.charAt(0).toUpperCase()}
               </div>
-              <div style={{ minWidth: 0, overflow: 'hidden' }}>
+              <div style={{ minWidth: 0, overflow: 'hidden', flex: 1 }}>
                 <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: '#f8fafc', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {user.displayName}
                 </div>
-                <div style={{ fontSize: '0.6875rem', color: '#94a3b8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {isAdmin ? 'System Administrator' : user.email}
+                <div
+                  title={isAdmin ? 'System Administrator' : isLead ? `Team Lead (${user.email})` : user.email}
+                  style={{ fontSize: '0.6875rem', color: '#94a3b8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                >
+                  {isAdmin ? 'System Administrator' : isLead ? 'Team Lead' : user.email}
                 </div>
               </div>
             </div>
@@ -552,6 +712,7 @@ export function AppLayout({ children }: AppLayoutProps): React.ReactElement {
                 fontFamily: 'inherit',
                 whiteSpace: 'nowrap',
                 transition: 'all 0.15s ease',
+                flexShrink: 0,
               }}
             >
               Log Out
@@ -562,9 +723,10 @@ export function AppLayout({ children }: AppLayoutProps): React.ReactElement {
 
       {/* Main Content Area with Topbar */}
       <div
+        className="app-main-column"
         inert={isMobile && isMobileMenuOpen ? true : undefined}
         aria-hidden={isMobile && isMobileMenuOpen ? 'true' : undefined}
-        style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: '100vh' }}
+        style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, height: '100%', overflowY: 'auto', overflowX: 'hidden' }}
       >
         {/* Topbar */}
         <header className="app-topbar">

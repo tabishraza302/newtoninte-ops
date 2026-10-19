@@ -18,6 +18,7 @@ import { AdminTeams } from './pages/AdminTeams'
 import { AdminAuditLog } from './pages/AdminAuditLog'
 import { Notifications } from './pages/Notifications'
 import { NotificationLiveProvider } from './components/NotificationLiveProvider'
+import { Approvals } from './pages/Approvals'
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -78,6 +79,16 @@ export function AppRoutes(): React.ReactElement {
           <RequireAuth>
             <AppLayout>
               <Dashboard />
+            </AppLayout>
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/approvals"
+        element={
+          <RequireAuth>
+            <AppLayout>
+              <Approvals />
             </AppLayout>
           </RequireAuth>
         }
