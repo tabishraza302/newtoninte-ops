@@ -49,6 +49,17 @@ const SEARCHABLE_METADATA_FIELDS = [
   'previousLastError',
 ] as const
 
+// Public audit metadata is allowlisted; internal journal identifiers stay server-side.
+const PUBLIC_METADATA_FIELDS: Record<AdminAuditAction, readonly string[]> = {
+  user_created: ['email', 'displayName'],
+  user_status_changed: ['email', 'displayName', 'fromStatus', 'toStatus'],
+  team_created: ['name', 'slug'],
+  membership_added: ['teamName', 'email', 'displayName', 'fromRole', 'toRole'],
+  membership_role_changed: ['teamName', 'email', 'displayName', 'fromRole', 'toRole'],
+  membership_removed: ['teamName', 'email', 'displayName', 'fromRole', 'toRole'],
+  job_retried: ['type', 'previousAttempts', 'previousLastError'],
+}
+
 
 /**
  * Records an immutable administrative audit event inside the caller's transaction.
@@ -120,7 +131,6 @@ export async function listAdminAudit(
       id: adminAuditEvents.id,
       action: adminAuditEvents.action,
       targetType: adminAuditEvents.targetType,
-      targetId: adminAuditEvents.targetId,
       metadata: adminAuditEvents.metadata,
       createdAt: adminAuditEvents.createdAt,
       actorId: users.id,
@@ -142,8 +152,11 @@ export async function listAdminAudit(
     },
     action: r.action,
     targetType: r.targetType,
-    targetId: r.targetId,
-    metadata: r.metadata,
+    metadata: Object.fromEntries(
+      PUBLIC_METADATA_FIELDS[r.action]
+        .filter((key) => Object.hasOwn(r.metadata, key))
+        .map((key) => [key, r.metadata[key]]),
+    ),
     createdAt: r.createdAt,
   }))
 

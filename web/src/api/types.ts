@@ -267,7 +267,6 @@ export interface AdminAuditEvent {
   actor: AdminAuditActor
   action: AdminAuditAction
   targetType: AdminAuditTargetType
-  targetId: number
   metadata: Record<string, any>
   createdAt: string
 }

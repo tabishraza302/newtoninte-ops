@@ -183,6 +183,7 @@ export const commonStyles = {
     border: '1px solid transparent',
     letterSpacing: '0.01em',
     textTransform: 'capitalize' as const,
+    whiteSpace: 'nowrap',
   } as React.CSSProperties,
 
   alertError: {

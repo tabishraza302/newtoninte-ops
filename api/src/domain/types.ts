@@ -50,7 +50,6 @@ export interface AdminAuditEvent {
   actor: AdminAuditActor
   action: AdminAuditAction
   targetType: 'user' | 'team' | 'membership' | 'job'
-  targetId: number
   metadata: Record<string, unknown>
   createdAt: Date
 }

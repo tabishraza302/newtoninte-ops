@@ -537,12 +537,10 @@ describe('Admin routes (Task 5.2)', () => {
       expect(res.body.events[0]).toMatchObject({
         action: 'job_retried',
         targetType: 'job',
-        targetId: jobId,
       })
       expect(res.body.events[1]).toMatchObject({
         action: 'user_status_changed',
         targetType: 'user',
-        targetId: target.id,
       })
       expect(JSON.stringify(res.body)).not.toMatch(/passwordHash|password_hash|tokenHash|payload/)
 

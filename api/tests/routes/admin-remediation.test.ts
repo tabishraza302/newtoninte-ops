@@ -448,6 +448,44 @@ describe('Admin operations remediation HTTP routes (admin-remediation.test.ts)',
       })
     })
 
+    it('omits target record identifiers and unapproved metadata from audit responses while retaining the journal', async () => {
+      const { authHeader, user: admin } = await adminAuth()
+      await withTransaction(async (tx) => {
+        await recordAdminAudit(tx, {
+          actorId: admin.id,
+          action: 'membership_added',
+          targetType: 'membership',
+          targetId: 987654,
+          metadata: {
+            teamId: 12345,
+            userId: 67890,
+            teamName: 'Operations',
+            email: 'member@example.test',
+            displayName: 'Member',
+            fromRole: null,
+            toRole: 'viewer',
+            internal: { targetId: 987654 },
+          },
+        })
+      })
+      const res = await request(app).get('/admin/audit-log').set('Authorization', authHeader)
+      expect(res.status).toBe(200)
+      expect(res.body.events).toHaveLength(1)
+      expect(res.body.events[0]).not.toHaveProperty('targetId')
+      expect(res.body.events[0].metadata).toEqual({
+        teamName: 'Operations',
+        email: 'member@example.test',
+        displayName: 'Member',
+        fromRole: null,
+        toRole: 'viewer',
+      })
+      const [stored] = await db.select().from(adminAuditEvents)
+      expect(stored).toMatchObject({
+        targetId: 987654,
+        metadata: { teamId: 12345, userId: 67890, internal: { targetId: 987654 } },
+      })
+    })
+
     describe('3.3 Action filter and actor/target search', () => {
       it('filters by action and performs literal escaped search across actor email/displayName and metadata', async () => {
         const { authHeader: aliceAuth, user: adminAlice } = await adminAuth({
@@ -710,7 +748,6 @@ describe('Admin operations remediation HTTP routes (admin-remediation.test.ts)',
           action: 'membership_role_changed',
           targetType: 'membership',
           metadata: {
-            teamId: team.id,
             fromRole: 'viewer',
             toRole: 'member',
           },

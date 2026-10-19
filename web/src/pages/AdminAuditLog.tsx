@@ -241,12 +241,19 @@ export function AdminAuditLogContent(): React.ReactElement {
     updateParam('q', next)
   }
   const getActionBadgeStyle = (action: AdminAuditAction): React.CSSProperties => {
+    const baseBadgeStyle: React.CSSProperties = {
+      ...commonStyles.badgePill,
+      display: 'inline-flex',
+      alignItems: 'center',
+      whiteSpace: 'nowrap',
+      lineHeight: 1.2,
+    }
     switch (action) {
       case 'user_created':
       case 'team_created':
       case 'membership_added':
         return {
-          ...commonStyles.badgePill,
+          ...baseBadgeStyle,
           backgroundColor: '#eff6ff',
           color: '#1d4ed8',
           border: '1px solid #bfdbfe',
@@ -254,14 +261,14 @@ export function AdminAuditLogContent(): React.ReactElement {
       case 'user_status_changed':
       case 'membership_role_changed':
         return {
-          ...commonStyles.badgePill,
+          ...baseBadgeStyle,
           backgroundColor: '#fefce8',
           color: '#a16207',
           border: '1px solid #fef08a',
         }
       case 'membership_removed':
         return {
-          ...commonStyles.badgePill,
+          ...baseBadgeStyle,
           backgroundColor: '#fef2f2',
           color: '#dc2626',
           border: '1px solid #fecaca',
@@ -269,7 +276,7 @@ export function AdminAuditLogContent(): React.ReactElement {
       case 'job_retried':
       default:
         return {
-          ...commonStyles.badgePill,
+          ...baseBadgeStyle,
           backgroundColor: '#f8fafc',
           color: '#475569',
           border: '1px solid #e2e8f0',
@@ -293,17 +300,35 @@ export function AdminAuditLogContent(): React.ReactElement {
         }}
       >
         <div>
-          <h1
-            style={{
-              fontSize: '1.75rem',
-              fontWeight: 800,
-              color: '#0f172a',
-              margin: '0 0 0.35rem',
-              letterSpacing: '-0.02em',
-            }}
-          >
-            Audit Log
-          </h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.35rem' }}>
+            <h1
+              style={{
+                fontSize: '1.75rem',
+                fontWeight: 800,
+                color: '#0f172a',
+                margin: 0,
+                letterSpacing: '-0.02em',
+                lineHeight: 1,
+              }}
+            >
+              Audit Log
+            </h1>
+            {events.length > 0 && (
+              <span
+                style={{
+                  ...commonStyles.badgePill,
+                  fontSize: '0.75rem',
+                  fontWeight: 600,
+                  backgroundColor: '#f1f5f9',
+                  color: '#475569',
+                  border: '1px solid #e2e8f0',
+                  lineHeight: 1,
+                }}
+              >
+                {events.length} {events.length === 1 ? 'event' : 'events'}
+              </span>
+            )}
+          </div>
           <p style={{ color: '#64748b', fontSize: '0.875rem', margin: 0 }}>
             Immutable record of administrative actions
           </p>
@@ -314,15 +339,19 @@ export function AdminAuditLogContent(): React.ReactElement {
       <section
         aria-label="Audit log filters"
         style={{
-          ...commonStyles.cardPadded,
-          marginBottom: '1.5rem',
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+          display: 'flex',
+          flexWrap: 'wrap',
           gap: '1rem',
-          alignItems: 'end',
+          padding: '1.25rem',
+          backgroundColor: '#ffffff',
+          borderRadius: '8px',
+          border: '1px solid #e2e8f0',
+          boxShadow: '0 1px 3px 0 rgba(15, 23, 42, 0.04)',
+          alignItems: 'flex-end',
+          marginBottom: '1.5rem',
         }}
       >
-        <div>
+        <div style={{ flex: '0 0 220px', minWidth: '200px' }}>
           <label htmlFor="audit-action-filter" style={commonStyles.label}>
             Filter by Action
           </label>
@@ -342,7 +371,7 @@ export function AdminAuditLogContent(): React.ReactElement {
           </select>
         </div>
 
-        <div>
+        <div style={{ flex: '1 1 320px', minWidth: '240px' }}>
           <label htmlFor="audit-search-filter" style={commonStyles.label}>
             Search Events
           </label>
@@ -388,12 +417,13 @@ export function AdminAuditLogContent(): React.ReactElement {
           role="status"
           data-testid="empty-audit-state"
           style={{
-            padding: '3rem 1rem',
+            padding: '3.5rem 1.5rem',
             textAlign: 'center',
             color: '#64748b',
             backgroundColor: '#ffffff',
             borderRadius: '8px',
             border: '1px dashed #cbd5e1',
+            boxShadow: '0 1px 3px 0 rgba(15, 23, 42, 0.04)',
           }}
         >
           <div style={{ fontWeight: 600, color: '#0f172a', marginBottom: '0.25rem' }}>
@@ -410,94 +440,136 @@ export function AdminAuditLogContent(): React.ReactElement {
       {/* Table */}
       {events.length > 0 && (
         <div
-          className="admin-audit-table-wrap"
           style={{
             backgroundColor: '#ffffff',
             border: '1px solid #e2e8f0',
-            borderRadius: '12px',
-            overflowX: 'auto',
+            borderRadius: '8px',
+            boxShadow: '0 1px 3px 0 rgba(15, 23, 42, 0.04)',
+            overflow: 'hidden',
+            marginBottom: '1.5rem',
           }}
         >
-          <table
-            data-testid="admin-audit-table"
-            style={{ width: '100%', minWidth: '760px', borderCollapse: 'collapse', fontSize: '0.875rem' }}
+          <style>{`
+            .admin-audit-row {
+              transition: background-color 0.15s ease;
+              border-bottom: 1px solid #f1f5f9;
+            }
+            .admin-audit-row:hover {
+              background-color: #f8fafc;
+            }
+            .admin-audit-row:last-child {
+              border-bottom: none;
+            }
+          `}</style>
+          <div
+            className="admin-audit-table-wrap"
+            style={{
+              overflowX: 'auto',
+            }}
           >
-            <thead>
-              <tr
-                style={{
-                  backgroundColor: '#f8fafc',
-                  borderBottom: '1px solid #e2e8f0',
-                  textAlign: 'left',
-                  fontSize: '0.75rem',
-                  fontWeight: 600,
-                  color: '#64748b',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.04em',
-                }}
-              >
-                <th scope="col" style={{ padding: '0.75rem 1rem' }}>Timestamp</th>
-                <th scope="col" style={{ padding: '0.75rem 1rem' }}>Actor</th>
-                <th scope="col" style={{ padding: '0.75rem 1rem' }}>Action</th>
-                <th scope="col" style={{ padding: '0.75rem 1rem' }}>Target</th>
-                <th scope="col" style={{ padding: '0.75rem 1rem' }}>Details</th>
-              </tr>
-            </thead>
-            <tbody>
-              {events.map((event) => (
+            <table
+              data-testid="admin-audit-table"
+              style={{ width: '100%', minWidth: '760px', borderCollapse: 'collapse', fontSize: '0.875rem' }}
+            >
+              <thead>
                 <tr
-                  key={event.id}
-                  style={{ borderBottom: '1px solid #f1f5f9', verticalAlign: 'top' }}
+                  style={{
+                    backgroundColor: '#f8fafc',
+                    borderBottom: '1px solid #e2e8f0',
+                    textAlign: 'left',
+                    fontSize: '0.75rem',
+                    fontWeight: 700,
+                    color: '#475569',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.04em',
+                  }}
                 >
-                  <td
-                    style={{
-                      padding: '0.875rem 1rem',
-                      color: '#64748b',
-                      fontSize: '0.8125rem',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {new Date(event.createdAt).toLocaleString()}
-                  </td>
-                  <td style={{ padding: '0.875rem 1rem' }}>
-                    <div style={{ fontWeight: 600, color: '#0f172a' }}>
-                      {event.actor.displayName}
-                    </div>
-                    <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
-                      {event.actor.email}
-                    </div>
-                  </td>
-                  <td style={{ padding: '0.875rem 1rem' }}>
-                    <span style={getActionBadgeStyle(event.action)}>
-                      {formatAuditAction(event.action)}
-                    </span>
-                  </td>
-                  <td
-                    style={{
-                      padding: '0.875rem 1rem',
-                      fontSize: '0.8125rem',
-                      color: '#475569',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    <span style={{ textTransform: 'capitalize', fontWeight: 600 }}>
-                      {event.targetType}
-                    </span>{' '}
-                    #{event.targetId}
-                  </td>
-                  <td
-                    style={{
-                      padding: '0.875rem 1rem',
-                      color: '#0f172a',
-                      fontSize: '0.8125rem',
-                      lineHeight: 1.45,
-                    }}
-                  >
-                    {formatAuditMetadata(event.action, event.metadata)}
-                  </td>
+                  <th scope="col" style={{ width: '170px', whiteSpace: 'nowrap', padding: '0.75rem 1rem' }}>Timestamp</th>
+                  <th scope="col" style={{ width: '240px', padding: '0.75rem 1rem' }}>Actor</th>
+                  <th scope="col" style={{ width: '190px', whiteSpace: 'nowrap', padding: '0.75rem 1rem' }}>Action</th>
+                  <th scope="col" style={{ minWidth: '260px', padding: '0.75rem 1rem' }}>Details</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {events.map((event) => (
+                  <tr
+                    key={event.id}
+                    className="admin-audit-row"
+                    style={{ verticalAlign: 'middle' }}
+                  >
+                    <td
+                      style={{
+                        width: '170px',
+                        padding: '0.875rem 1rem',
+                        color: '#64748b',
+                        fontSize: '0.8125rem',
+                        whiteSpace: 'nowrap',
+                        fontVariantNumeric: 'tabular-nums',
+                        verticalAlign: 'middle',
+                      }}
+                    >
+                      {new Date(event.createdAt).toLocaleString()}
+                    </td>
+                    <td style={{ width: '240px', padding: '0.875rem 1rem', verticalAlign: 'middle' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                        <div
+                          style={{
+                            width: '28px',
+                            height: '28px',
+                            borderRadius: '9999px',
+                            backgroundColor: theme.colors.accentSubtle,
+                            color: theme.colors.accent,
+                            border: `1px solid ${theme.colors.accentBorder}`,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontSize: '0.75rem',
+                            fontWeight: 700,
+                            flexShrink: 0,
+                          }}
+                        >
+                          {(event.actor.displayName || event.actor.email).charAt(0).toUpperCase()}
+                        </div>
+                        <div>
+                          <div style={{ fontWeight: 600, color: '#0f172a' }}>
+                            {event.actor.displayName}
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                            {event.actor.email}
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+                    <td
+                      style={{
+                        width: '190px',
+                        padding: '0.875rem 1rem',
+                        verticalAlign: 'middle',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      <span style={getActionBadgeStyle(event.action)}>
+                        {formatAuditAction(event.action)}
+                      </span>
+                    </td>
+                    <td
+                      style={{
+                        minWidth: '260px',
+                        padding: '0.875rem 1rem',
+                        color: '#1e293b',
+                        fontSize: '0.8125rem',
+                        lineHeight: 1.5,
+                        wordBreak: 'break-word',
+                        verticalAlign: 'middle',
+                      }}
+                    >
+                      {formatAuditMetadata(event.action, event.metadata)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 

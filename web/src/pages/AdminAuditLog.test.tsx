@@ -51,7 +51,6 @@ describe('AdminAuditLog Page', () => {
     actor: sampleActor,
     action: 'user_created',
     targetType: 'user',
-    targetId: 10,
     metadata: {
       email: 'alice@company.test',
       displayName: 'Alice Engineer',
@@ -64,7 +63,6 @@ describe('AdminAuditLog Page', () => {
     actor: sampleActor,
     action: 'user_status_changed',
     targetType: 'user',
-    targetId: 10,
     metadata: {
       email: 'alice@company.test',
       displayName: 'Alice Engineer',
@@ -79,7 +77,6 @@ describe('AdminAuditLog Page', () => {
     actor: sampleActor,
     action: 'team_created',
     targetType: 'team',
-    targetId: 5,
     metadata: {
       name: 'Platform Engineering',
       slug: 'platform-eng',
@@ -92,11 +89,8 @@ describe('AdminAuditLog Page', () => {
     actor: sampleActor,
     action: 'membership_added',
     targetType: 'membership',
-    targetId: 101,
     metadata: {
-      teamId: 5,
       teamName: 'Platform Engineering',
-      userId: 10,
       email: 'alice@company.test',
       displayName: 'Alice Engineer',
       fromRole: null,
@@ -110,11 +104,8 @@ describe('AdminAuditLog Page', () => {
     actor: sampleActor,
     action: 'membership_role_changed',
     targetType: 'membership',
-    targetId: 101,
     metadata: {
-      teamId: 5,
       teamName: 'Platform Engineering',
-      userId: 10,
       email: 'alice@company.test',
       displayName: 'Alice Engineer',
       fromRole: 'member',
@@ -128,11 +119,8 @@ describe('AdminAuditLog Page', () => {
     actor: sampleActor,
     action: 'membership_removed',
     targetType: 'membership',
-    targetId: 101,
     metadata: {
-      teamId: 5,
       teamName: 'Platform Engineering',
-      userId: 10,
       email: 'alice@company.test',
       displayName: 'Alice Engineer',
       fromRole: 'lead',
@@ -145,7 +133,6 @@ describe('AdminAuditLog Page', () => {
     actor: sampleActor,
     action: 'job_retried',
     targetType: 'job',
-    targetId: 42,
     metadata: {
       type: 'email.invite',
       previousAttempts: 3,
@@ -260,7 +247,7 @@ describe('AdminAuditLog Page', () => {
       expect(tableScope.getByRole('columnheader', { name: /Timestamp/i })).toBeInTheDocument()
       expect(tableScope.getByRole('columnheader', { name: /Actor/i })).toBeInTheDocument()
       expect(tableScope.getByRole('columnheader', { name: /Action/i })).toBeInTheDocument()
-      expect(tableScope.getByRole('columnheader', { name: /Target/i })).toBeInTheDocument()
+      expect(tableScope.queryByRole('columnheader', { name: /Target/i })).not.toBeInTheDocument()
       expect(tableScope.getByRole('columnheader', { name: /Details/i })).toBeInTheDocument()
 
       // Actor display (System Admin / admin@company.test)
@@ -279,15 +266,13 @@ describe('AdminAuditLog Page', () => {
       // 1. user_created
       const userCreatedRow = within(getRowByAction('User Created'))
       expect(userCreatedRow.getByText('User Created')).toBeInTheDocument()
-      expect(userCreatedRow.getByText('user')).toBeInTheDocument()
-      expect(userCreatedRow.getByText('#10')).toBeInTheDocument()
+      expect(userCreatedRow.queryByText('#10')).not.toBeInTheDocument()
       expect(userCreatedRow.getByText('Alice Engineer (alice@company.test)')).toBeInTheDocument()
 
       // 2. user_status_changed (from → to)
       const userStatusRow = within(getRowByAction('User Status Changed'))
       expect(userStatusRow.getByText('User Status Changed')).toBeInTheDocument()
-      expect(userStatusRow.getByText('user')).toBeInTheDocument()
-      expect(userStatusRow.getByText('#10')).toBeInTheDocument()
+      expect(userStatusRow.queryByText('#10')).not.toBeInTheDocument()
       expect(
         userStatusRow.getByText('Alice Engineer (alice@company.test): active → disabled'),
       ).toBeInTheDocument()
@@ -295,15 +280,13 @@ describe('AdminAuditLog Page', () => {
       // 3. team_created
       const teamCreatedRow = within(getRowByAction('Team Created'))
       expect(teamCreatedRow.getByText('Team Created')).toBeInTheDocument()
-      expect(teamCreatedRow.getByText('team')).toBeInTheDocument()
-      expect(teamCreatedRow.getByText('#5')).toBeInTheDocument()
+      expect(teamCreatedRow.queryByText('#5')).not.toBeInTheDocument()
       expect(teamCreatedRow.getByText('Platform Engineering (platform-eng)')).toBeInTheDocument()
 
       // 4. membership_added
       const memberAddedRow = within(getRowByAction('Membership Added'))
       expect(memberAddedRow.getByText('Membership Added')).toBeInTheDocument()
-      expect(memberAddedRow.getByText('membership')).toBeInTheDocument()
-      expect(memberAddedRow.getByText('#101')).toBeInTheDocument()
+      expect(memberAddedRow.queryByText('#101')).not.toBeInTheDocument()
       expect(
         memberAddedRow.getByText('Alice Engineer (alice@company.test) added to Platform Engineering (lead)'),
       ).toBeInTheDocument()
@@ -311,8 +294,7 @@ describe('AdminAuditLog Page', () => {
       // 5. membership_role_changed (fromRole → toRole)
       const roleChangedRow = within(getRowByAction('Role Changed'))
       expect(roleChangedRow.getByText('Role Changed')).toBeInTheDocument()
-      expect(roleChangedRow.getByText('membership')).toBeInTheDocument()
-      expect(roleChangedRow.getByText('#101')).toBeInTheDocument()
+      expect(roleChangedRow.queryByText('#101')).not.toBeInTheDocument()
       expect(
         roleChangedRow.getByText('Alice Engineer (alice@company.test) in Platform Engineering: member → lead'),
       ).toBeInTheDocument()
@@ -320,8 +302,7 @@ describe('AdminAuditLog Page', () => {
       // 6. membership_removed
       const memberRemovedRow = within(getRowByAction('Membership Removed'))
       expect(memberRemovedRow.getByText('Membership Removed')).toBeInTheDocument()
-      expect(memberRemovedRow.getByText('membership')).toBeInTheDocument()
-      expect(memberRemovedRow.getByText('#101')).toBeInTheDocument()
+      expect(memberRemovedRow.queryByText('#101')).not.toBeInTheDocument()
       expect(
         memberRemovedRow.getByText(
           'Alice Engineer (alice@company.test) removed from Platform Engineering (was lead)',
@@ -331,8 +312,7 @@ describe('AdminAuditLog Page', () => {
       // 7. job_retried
       const jobRetriedRow = within(getRowByAction('Job Retried'))
       expect(jobRetriedRow.getByText('Job Retried')).toBeInTheDocument()
-      expect(jobRetriedRow.getByText('job')).toBeInTheDocument()
-      expect(jobRetriedRow.getByText('#42')).toBeInTheDocument()
+      expect(jobRetriedRow.queryByText('#42')).not.toBeInTheDocument()
       expect(
         jobRetriedRow.getByText('email.invite (attempts: 3, error: SMTP connection ECONNREFUSED)'),
       ).toBeInTheDocument()
@@ -344,7 +324,6 @@ describe('AdminAuditLog Page', () => {
           actor: sampleActor,
           action: 'user_status_changed',
           targetType: 'user',
-          targetId: 99,
           metadata: {
             fromStatus: 'disabled',
             toStatus: 'active',
@@ -356,7 +335,6 @@ describe('AdminAuditLog Page', () => {
           actor: sampleActor,
           action: 'membership_added',
           targetType: 'membership',
-          targetId: 102,
           metadata: {
             teamName: 'Security Team',
             email: 'bob@company.test',
@@ -370,7 +348,6 @@ describe('AdminAuditLog Page', () => {
           actor: sampleActor,
           action: 'job_retried',
           targetType: 'job',
-          targetId: 43,
           metadata: {
             type: 'email.reset',
             previousAttempts: 0,
@@ -382,7 +359,6 @@ describe('AdminAuditLog Page', () => {
           actor: sampleActor,
           action: 'team_created',
           targetType: 'team',
-          targetId: 6,
           metadata: {},
           createdAt: '2026-10-18T11:15:00.000Z',
         },
@@ -405,23 +381,23 @@ describe('AdminAuditLog Page', () => {
       // Boundary user status: no name/email, only status transition
       const statusRow = within(getBoundaryRow('User Status Changed'))
       expect(statusRow.getByText('disabled → active')).toBeInTheDocument()
-      expect(statusRow.getByText('#99')).toBeInTheDocument()
+      expect(statusRow.queryByText('#99')).not.toBeInTheDocument()
 
       // Boundary membership add: with fromRole transition (viewer → lead)
       const memberAddRow = within(getBoundaryRow('Membership Added'))
       expect(
         memberAddRow.getByText('bob@company.test added to Security Team (viewer → lead)'),
       ).toBeInTheDocument()
-      expect(memberAddRow.getByText('#102')).toBeInTheDocument()
+      expect(memberAddRow.queryByText('#102')).not.toBeInTheDocument()
 
       // Boundary job retry: 0 attempts, no error
       const jobRow = within(getBoundaryRow('Job Retried'))
       expect(jobRow.getByText('email.reset (attempts: 0)')).toBeInTheDocument()
-      expect(jobRow.getByText('#43')).toBeInTheDocument()
+      expect(jobRow.queryByText('#43')).not.toBeInTheDocument()
 
-      // Target identifiers in table
+      // Target identifiers in table should not exist
       const teamRow = within(getBoundaryRow('Team Created'))
-      expect(teamRow.getByText('#6')).toBeInTheDocument()
+      expect(teamRow.queryByText('#6')).not.toBeInTheDocument()
     })
   })
 
@@ -844,5 +820,52 @@ describe('AdminAuditLog Page', () => {
         expect(within(currentTable).queryByText('User Created')).not.toBeInTheDocument()
       })
     })
-})
+  })
+
+  describe('Visual Polish & Table Styling', () => {
+    it('renders event count badge in header, actor initial avatars, and non-wrapping action pills', async () => {
+      mockAuditApi(allRepresentativeEvents)
+      await renderAdminAuditLog()
+
+      const table = await screen.findByTestId('admin-audit-table')
+      const tableScope = within(table)
+
+      // Header event count badge
+      expect(screen.getByText('7 events')).toBeInTheDocument()
+
+      // Avatar tokens with first initial of actor ('S' for System Admin)
+      const initialTokens = tableScope.getAllByText('S')
+      expect(initialTokens.length).toBe(7)
+      expect(initialTokens[0]).toHaveStyle({ borderRadius: '9999px' })
+
+      // Action badge non-wrapping guarantee
+      const userCreatedBadge = tableScope.getByText('User Created')
+      expect(userCreatedBadge).toHaveStyle({ whiteSpace: 'nowrap' })
+
+      const memberRemovedBadge = tableScope.getByText('Membership Removed')
+      expect(memberRemovedBadge).toHaveStyle({ whiteSpace: 'nowrap' })
+
+      // Database primary key ID chip should not be displayed
+      expect(tableScope.queryByText('#10')).not.toBeInTheDocument()
+      // Table row class
+      const rows = table.querySelectorAll('tbody tr')
+      expect(rows.length).toBe(7)
+      rows.forEach((row) => {
+        expect(row.className).toContain('admin-audit-row')
+      })
+
+      // Two-tier container structure
+      const tableWrap = table.closest('.admin-audit-table-wrap')
+      expect(tableWrap).toBeInTheDocument()
+      expect(tableWrap?.parentElement).toHaveStyle({ borderRadius: '8px' })
+    })
+
+    it('renders singular "1 event" badge in header when single event is returned', async () => {
+      mockAuditApi([userCreatedEvent])
+      await renderAdminAuditLog()
+
+      await screen.findByTestId('admin-audit-table')
+      expect(screen.getByText('1 event')).toBeInTheDocument()
+    })
+  })
 })
