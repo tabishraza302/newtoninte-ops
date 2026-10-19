@@ -259,6 +259,41 @@ describe('items service - createItem (Task 4.3)', () => {
 
     expect(code).toBe('FORBIDDEN')
   })
+  it('admin with team membership gets FORBIDDEN when attempting to create item', async () => {
+    const admin = await seedUser()
+    const team = await seedTeam()
+    await seedMembership(admin.id, team.id, 'lead')
+
+    const actor: Actor = { id: admin.id, isAdmin: true }
+    const code = await errorCode(() =>
+      createItem(actor, {
+        teamId: team.id,
+        title: 'Admin item',
+        type: 'task',
+        priority: 'low',
+      }),
+    )
+
+    expect(code).toBe('FORBIDDEN')
+  })
+
+  it('admin without team membership gets NOT_FOUND when attempting to create item', async () => {
+    const admin = await seedUser()
+    const team = await seedTeam()
+
+    const actor: Actor = { id: admin.id, isAdmin: true }
+    const code = await errorCode(() =>
+      createItem(actor, {
+        teamId: team.id,
+        title: 'Admin item',
+        type: 'task',
+        priority: 'low',
+      }),
+    )
+
+    expect(code).toBe('NOT_FOUND')
+  })
+
 
   it('validates required fields (title, type, priority, dueAt)', async () => {
     const lead = await seedUser()

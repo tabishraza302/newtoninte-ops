@@ -88,9 +88,13 @@ export async function can(
       return role !== null
     // Members and leads.
     case 'item:comment':
-    case 'item:create':
     case 'item:editContent':
     case 'item:claim':
+      return role === 'member' || role === 'lead'
+    case 'item:create':
+      if (actor.isAdmin) {
+        return false
+      }
       return role === 'member' || role === 'lead'
     // Lead only.
     case 'item:editPriority':

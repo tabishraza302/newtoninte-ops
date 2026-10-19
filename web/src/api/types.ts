@@ -91,7 +91,7 @@ export interface WorkItem {
     id: number
     name: string
     slug?: string
-  } | null
+  } | null | undefined
 }
 
 export interface ActivityEvent {

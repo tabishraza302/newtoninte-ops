@@ -1,42 +1,60 @@
 import React from 'react'
 import { Link } from 'react-router-dom'
 import type { WorkItem } from '../api/types'
+import { useTeams } from '../api/hooks'
 import { getStatusBadgeStyle, getPriorityBadgeStyle, theme } from '../theme'
 
 const ITEM_TABLE_GRID_TEMPLATE =
-  'minmax(70px, max-content) minmax(200px, 3fr) max-content max-content minmax(130px, 1.5fr) minmax(90px, max-content)'
+  'minmax(70px, max-content) minmax(200px, 3fr) minmax(100px, max-content) max-content max-content minmax(130px, 1.5fr) minmax(90px, max-content)'
 const ITEM_TABLE_COLUMN_GAP = '1rem'
 const ITEM_TABLE_MIN_WIDTH = 'fit-content'
 /* Without subgrid a row cannot borrow the container's tracks, so every row
    resolves this uniform template itself; `max-content` tracks are excluded
    because they would size per row and break the shared column edges. */
 const ITEM_TABLE_FALLBACK_GRID_TEMPLATE =
-  'minmax(70px, 100px) minmax(200px, 3fr) 160px 110px minmax(130px, 1.5fr) 120px'
+  'minmax(70px, 100px) minmax(200px, 3fr) 120px 160px 110px minmax(130px, 1.5fr) 120px'
 
+export const TeamContext = React.createContext<Map<number, string>>(new Map())
 export function ItemTableGrid({
   label,
+  teams,
   children,
 }: {
   label: string
+  teams?: { id: number; name: string }[]
   children: React.ReactNode
 }): React.ReactElement {
-  return (
-    <div
-      role="table"
-      aria-label={label}
-      className="item-table"
-      style={
-        {
-          minWidth: ITEM_TABLE_MIN_WIDTH,
-          display: 'grid',
-          gridTemplateColumns: ITEM_TABLE_GRID_TEMPLATE,
-          columnGap: ITEM_TABLE_COLUMN_GAP,
-          '--item-table-columns': ITEM_TABLE_FALLBACK_GRID_TEMPLATE,
-        } as React.CSSProperties & Record<'--item-table-columns', string>
+  const teamsQuery = useTeams()
+  const parentTeamMap = React.useContext(TeamContext)
+  const teamMap = React.useMemo(() => {
+    const map = new Map(parentTeamMap)
+    const list = teams ?? teamsQuery.data?.teams
+    if (list) {
+      for (const t of list) {
+        map.set(t.id, t.name)
       }
-    >
-      {children}
-    </div>
+    }
+    return map
+  }, [teams, teamsQuery.data?.teams, parentTeamMap])
+  return (
+    <TeamContext.Provider value={teamMap}>
+      <div
+        role="table"
+        aria-label={label}
+        className="item-table"
+        style={
+          {
+            minWidth: ITEM_TABLE_MIN_WIDTH,
+            display: 'grid',
+            gridTemplateColumns: ITEM_TABLE_GRID_TEMPLATE,
+            columnGap: ITEM_TABLE_COLUMN_GAP,
+            '--item-table-columns': ITEM_TABLE_FALLBACK_GRID_TEMPLATE,
+          } as React.CSSProperties & Record<'--item-table-columns', string>
+        }
+      >
+        {children}
+      </div>
+    </TeamContext.Provider>
   )
 }
 
@@ -63,6 +81,7 @@ export function ItemTableHeader(): React.ReactElement {
     >
       <span role="columnheader">ID</span>
       <span role="columnheader">Title</span>
+      <span role="columnheader">Team</span>
       <span role="columnheader">Status</span>
       <span role="columnheader">Priority</span>
       <span role="columnheader">Assignee</span>
@@ -75,12 +94,18 @@ export function ItemTableHeader(): React.ReactElement {
 
 export interface ItemRowProps {
   item: WorkItem
+  teamName?: string | undefined
 }
 
-export function ItemRow({ item }: ItemRowProps): React.ReactElement {
+export function ItemRow({ item, teamName: propTeamName }: ItemRowProps): React.ReactElement {
+  const teamMap = React.useContext(TeamContext)
+  const teamName =
+    propTeamName ??
+    item.team?.name ??
+    teamMap.get(item.teamId) ??
+    `Team #${item.teamId}`
   const assigneeName = item.assignee?.displayName ?? 'Unassigned'
   const dueDate = item.dueAt ? new Date(item.dueAt).toLocaleDateString() : 'No due date'
-
   return (
     <div
       role="row"
@@ -148,26 +173,28 @@ export function ItemRow({ item }: ItemRowProps): React.ReactElement {
           }}
         >
           <span style={{ textTransform: 'capitalize' }}>{item.type.replace(/_/g, ' ')}</span>
-          <span
-            data-testid="item-team-badge"
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              padding: '0.1rem 0.375rem',
-              borderRadius: '4px',
-              fontSize: '0.6875rem',
-              fontWeight: 500,
-              backgroundColor: '#f1f5f9',
-              color: '#475569',
-              border: '1px solid #e2e8f0',
-              textTransform: 'none',
-            }}
-          >
-            Team #{item.teamId}
-          </span>
         </div>
       </div>
 
+      <div role="cell" style={{ minWidth: 0 }}>
+        <span
+          data-testid="item-team-badge"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            padding: '0.15rem 0.5rem',
+            borderRadius: '4px',
+            fontSize: '0.75rem',
+            fontWeight: 500,
+            backgroundColor: '#f1f5f9',
+            color: '#334155',
+            border: '1px solid #e2e8f0',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {teamName}
+        </span>
+      </div>
       <div role="cell" style={{ minWidth: 0 }}>
         <span
           data-testid="item-status"

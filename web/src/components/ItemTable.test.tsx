@@ -5,14 +5,14 @@ import { ItemRow, ItemTableGrid, ItemTableHeader } from './ItemTable'
 import type { WorkItem } from '../api/types'
 
 describe('ItemTableHeader Component', () => {
-  it('renders all 6 expected column headers with appropriate styles', () => {
+  it('renders all 7 expected column headers with appropriate styles', () => {
     renderWithProviders(<ItemTableHeader />)
 
     const headers = screen.getAllByRole('columnheader')
-    expect(headers).toHaveLength(6)
+    expect(headers).toHaveLength(7)
 
     const headerTexts = headers.map((h) => h.textContent)
-    expect(headerTexts).toEqual(['ID', 'Title', 'Status', 'Priority', 'Assignee', 'Due'])
+    expect(headerTexts).toEqual(['ID', 'Title', 'Team', 'Status', 'Priority', 'Assignee', 'Due'])
 
     const dueHeader = screen.getByRole('columnheader', { name: 'Due' })
     expect(dueHeader).toHaveStyle({ textAlign: 'right' })
@@ -35,16 +35,17 @@ describe('ItemRow Component', () => {
     version: 1,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
+    team: { id: 1, name: 'Operations', slug: 'ops' },
   }
 
-  it('renders all 6 distinct cells in order matching header columns', () => {
+  it('renders all 7 distinct cells in order matching header columns', () => {
     renderWithProviders(<ItemRow item={baseMockItem} />)
 
     const row = screen.getByTestId('item-row-42')
     expect(row).toBeInTheDocument()
 
     const cells = row.children
-    expect(cells).toHaveLength(6)
+    expect(cells).toHaveLength(7)
 
     // Cell 1: ID
     const idLink = screen.getByRole('link', { name: '#42' })
@@ -59,23 +60,28 @@ describe('ItemRow Component', () => {
     expect(cells[1]).toContainElement(titleLink)
     expect(cells[1]).toHaveTextContent('payment')
 
-    // Cell 3: Status
+    // Cell 3: Team Name
+    const teamBadge = screen.getByTestId('item-team-badge')
+    expect(teamBadge).toHaveTextContent('Operations')
+    expect(cells[2]).toContainElement(teamBadge)
+
+    // Cell 4: Status
     const statusBadge = screen.getByTestId('item-status')
     expect(statusBadge).toHaveTextContent('open')
-    expect(cells[2]).toContainElement(statusBadge)
+    expect(cells[3]).toContainElement(statusBadge)
 
-    // Cell 4: Priority
+    // Cell 5: Priority
     const priorityBadge = screen.getByTestId('item-priority')
     expect(priorityBadge).toHaveTextContent('urgent')
-    expect(cells[3]).toContainElement(priorityBadge)
+    expect(cells[4]).toContainElement(priorityBadge)
 
-    // Cell 5: Assignee
-    expect(cells[4]).toHaveTextContent('Alice Engineer')
+    // Cell 6: Assignee
+    expect(cells[5]).toHaveTextContent('Alice Engineer')
 
-    // Cell 6: Due Date
+    // Cell 7: Due Date
     const expectedDueDate = new Date('2026-12-31T00:00:00.000Z').toLocaleDateString()
-    expect(cells[5]).toHaveTextContent(expectedDueDate)
-    expect(cells[5]).toHaveStyle({ textAlign: 'right' })
+    expect(cells[6]).toHaveTextContent(expectedDueDate)
+    expect(cells[6]).toHaveStyle({ textAlign: 'right' })
   })
 
   it('renders fallback values when assignee and dueAt are null', () => {
@@ -91,14 +97,14 @@ describe('ItemRow Component', () => {
 
     const row = screen.getByTestId('item-row-99')
     const cells = row.children
-    expect(cells).toHaveLength(6)
+    expect(cells).toHaveLength(7)
 
-    // Cell 5: Fallback Assignee
-    expect(cells[4]).toHaveTextContent('Unassigned')
+    // Cell 6: Fallback Assignee
+    expect(cells[5]).toHaveTextContent('Unassigned')
 
-    // Cell 6: Fallback Due Date
-    expect(cells[5]).toHaveTextContent('No due date')
-    expect(cells[5]).toHaveStyle({ textAlign: 'right' })
+    // Cell 7: Fallback Due Date
+    expect(cells[6]).toHaveTextContent('No due date')
+    expect(cells[6]).toHaveStyle({ textAlign: 'right' })
   })
 
   it('renders awaiting_approval status badge without text distortion', () => {
@@ -147,7 +153,7 @@ describe('ItemRow Component', () => {
     const headers = screen.getAllByRole('columnheader')
     const rows = screen.getAllByRole('row')
 
-    expect(screen.getAllByRole('cell')).toHaveLength(6)
+    expect(screen.getAllByRole('cell')).toHaveLength(7)
     expect(rows).toHaveLength(2)
 
     // `X` collapses each parenthesised track function to one token, so the
@@ -167,5 +173,35 @@ describe('ItemRow Component', () => {
     const fallback = table.style.getPropertyValue('--item-table-columns')
     expect(fallback.replace(/\([^)]*\)/g, 'X').trim().split(/\s+/)).toHaveLength(headers.length)
     expect(fallback).not.toContain('max-content')
+  })
+
+  it('displays the team name looked up from ItemTableGrid teams', () => {
+    const { team: _ignored, ...rest } = baseMockItem
+    const itemWithoutTeamObj: WorkItem = {
+      ...rest,
+      id: 55,
+      teamId: 2,
+      team: null,
+    }
+    const mockTeamsList = [
+      { id: 1, name: 'Operations', slug: 'ops' },
+      { id: 2, name: 'Finance', slug: 'finance' },
+    ]
+
+    renderWithProviders(
+      <ItemTableGrid label="Work items" teams={mockTeamsList}>
+        <ItemTableHeader />
+        <ItemRow item={itemWithoutTeamObj} />
+      </ItemTableGrid>,
+    )
+
+    const teamBadge = screen.getByTestId('item-team-badge')
+    expect(teamBadge).toHaveTextContent('Finance')
+  })
+
+  it('displays custom teamName prop when provided', () => {
+    renderWithProviders(<ItemRow item={baseMockItem} teamName="Custom Team" />)
+    const teamBadge = screen.getByTestId('item-team-badge')
+    expect(teamBadge).toHaveTextContent('Custom Team')
   })
 })

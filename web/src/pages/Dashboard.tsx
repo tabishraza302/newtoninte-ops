@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { useItems, useTeams } from '../api/hooks'
 import type { ViewName, WorkItem } from '../api/types'
 import { ItemRow, ItemTableGrid, ItemTableHeader } from '../components/ItemTable'
@@ -52,6 +52,7 @@ export function Dashboard(): React.ReactElement {
 
   const { data, isLoading, isFetching, error } = useItems(query)
 
+  const teamMap = useMemo(() => new Map(teams.map((t) => [t.id, t.name])), [teams])
   useEffect(() => {
     if (data?.items) {
       if (!cursor) {
@@ -230,10 +231,10 @@ export function Dashboard(): React.ReactElement {
             }}
           >
             <div style={{ overflowX: 'auto' }}>
-              <ItemTableGrid label="Work items">
+              <ItemTableGrid label="Work items" teams={teams}>
                 <ItemTableHeader />
                 {items.map((item) => (
-                  <ItemRow key={item.id} item={item} />
+                  <ItemRow key={item.id} item={item} teamName={teamMap.get(item.teamId)} />
                 ))}
               </ItemTableGrid>
             </div>

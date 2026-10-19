@@ -41,6 +41,10 @@ describe('can', () => {
     expect(await can(a(outsider.id, true), 'team:member:add', { kind: 'team', teamId: other.id })).toBe(true)
     // admin has no work-item superpowers
     expect(await can(a(outsider.id, true), 'item:read', res)).toBe(false)
+    // admin cannot create items even if holding membership
+    const adminMember = await seedUser({ email: 'admin-mem@x' })
+    await seedMembership(adminMember.id, team.id, 'lead')
+    expect(await can(a(adminMember.id, true), 'item:create', { kind: 'team', teamId: team.id })).toBe(false)
   })
   it('submit requires being the assignee for a non-lead', async () => {
     const team = await seedTeam(); const member = await seedUser(); const other = await seedUser({ email: 'o@x' })

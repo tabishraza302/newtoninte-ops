@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { useSearchParams, Link } from 'react-router-dom'
 import { useItems, useTeams, useMe } from '../api/hooks'
 import {
@@ -26,7 +26,9 @@ export function ItemList(): React.ReactElement {
 
   const { data: teamsData } = useTeams()
   const { data: meData } = useMe()
+  const isAdmin = !!meData?.user?.isAdmin
   const teams = teamsData?.teams ?? []
+  const teamMap = useMemo(() => new Map(teams.map((t) => [t.id, t.name])), [teams])
 
   const filterKey = `${statusParam}|${priorityParam}|${typeParam}|${qParam}|${teamParam}|${assigneeParam}`
 
@@ -122,9 +124,11 @@ export function ItemList(): React.ReactElement {
           </p>
         </div>
 
-        <Link to="/items/new" style={commonStyles.buttonPrimary}>
-          <span style={{ fontSize: '1rem', lineHeight: 1 }}>+</span> New Item
-        </Link>
+        {!isAdmin && (
+          <Link to="/items/new" style={commonStyles.buttonPrimary}>
+            <span style={{ fontSize: '1rem', lineHeight: 1 }}>+</span> New Item
+          </Link>
+        )}
       </header>
 
       {/* Filter Controls */}
@@ -326,7 +330,11 @@ export function ItemList(): React.ReactElement {
               No items found
             </p>
             <p style={{ margin: '0.5rem 0 1.25rem', fontSize: '0.875rem' }}>
-              {hasActiveFilters ? 'Try adjusting or clearing your filter criteria.' : 'Create a work item to get started.'}
+              {hasActiveFilters
+                ? 'Try adjusting or clearing your filter criteria.'
+                : isAdmin
+                  ? 'No work items exist for your authorized teams.'
+                  : 'Create a work item to get started.'}
             </p>
             {hasActiveFilters ? (
               <button
@@ -336,11 +344,11 @@ export function ItemList(): React.ReactElement {
               >
                 Clear all filters
               </button>
-            ) : (
+            ) : !isAdmin ? (
               <Link to="/items/new" style={commonStyles.buttonPrimary}>
                 Create an Item
               </Link>
-            )}
+            ) : null}
           </div>
         )}
 
@@ -355,10 +363,10 @@ export function ItemList(): React.ReactElement {
             }}
           >
             <div style={{ overflowX: 'auto' }}>
-              <ItemTableGrid label="Work items">
+              <ItemTableGrid label="Work items" teams={teams}>
                 <ItemTableHeader />
                 {items.map((item) => (
-                  <ItemRow key={item.id} item={item} />
+                  <ItemRow key={item.id} item={item} teamName={teamMap.get(item.teamId)} />
                 ))}
               </ItemTableGrid>
             </div>

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen, fireEvent, waitFor } from '@testing-library/react'
+import { screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { renderWithProviders } from '../test/test-utils'
 import { Dashboard } from './Dashboard'
 import type { WorkItem } from '../api/types'
@@ -139,7 +139,8 @@ describe('Dashboard Page (Task 3.7)', () => {
 
     const table = screen.getByRole('table', { name: 'Work items' })
     expect(table).toContainElement(screen.getByTestId('item-row-42'))
-    expect(screen.getAllByRole('cell')).toHaveLength(6)
+    expect(within(table).getByTestId('item-team-badge')).toHaveTextContent('Core Team')
+    expect(screen.getAllByRole('cell')).toHaveLength(7)
   })
 
   it('supports cursor pagination via Load More button', async () => {

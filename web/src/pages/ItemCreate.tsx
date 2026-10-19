@@ -16,6 +16,7 @@ export function ItemCreate({ userRole: propRole, teamId: propTeamId }: ItemCreat
   const { data: meData, isLoading: meLoading } = useMe()
   const { data: teamsData, isLoading: teamsLoading } = useTeams()
   const auth = useOptionalAuth()
+  const isAdmin = !!meData?.user?.isAdmin || !!auth?.user?.isAdmin
 
   const userMemberships = meData?.memberships ?? []
   const teams = teamsData?.teams ?? []
@@ -48,7 +49,7 @@ export function ItemCreate({ userRole: propRole, teamId: propTeamId }: ItemCreat
       ? (auth.user.role as Role)
       : 'viewer')
 
-  const canCreateInTeam = effectiveRole === 'member' || effectiveRole === 'lead'
+  const canCreateInTeam = !isAdmin && (effectiveRole === 'member' || effectiveRole === 'lead')
 
   const handleSuccess = (createdItem: WorkItem): void => {
     navigate(`/items/${createdItem.id}`)
@@ -93,7 +94,7 @@ export function ItemCreate({ userRole: propRole, teamId: propTeamId }: ItemCreat
       </header>
 
       {/* Team selection if user belongs to multiple teams */}
-      {teams.length > 1 && (
+      {!isAdmin && teams.length > 1 && (
         <div
           style={{
             ...commonStyles.cardPadded,
@@ -140,11 +141,23 @@ export function ItemCreate({ userRole: propRole, teamId: propTeamId }: ItemCreat
             Cannot Create Work Item
           </h2>
           <p style={{ color: theme.colors.textMuted, fontSize: '0.875rem', margin: '0 0 1.5rem' }}>
-            You hold a <strong>viewer</strong> role in this team. Only team members and leads may create new work items.
+            {isAdmin ? (
+              'Administrators cannot create work items. Item creation is reserved for operational team members and leads.'
+            ) : (
+              <>
+                You hold a <strong>viewer</strong> role in this team. Only team members and leads may create new work items.
+              </>
+            )}
           </p>
-          <Link to="/items" style={commonStyles.buttonSecondary}>
-            View Work Items
-          </Link>
+          {isAdmin ? (
+            <Link to="/admin/jobs" style={commonStyles.buttonSecondary}>
+              Back to Platform Ops
+            </Link>
+          ) : (
+            <Link to="/items" style={commonStyles.buttonSecondary}>
+              View Work Items
+            </Link>
+          )}
         </div>
       ) : (
         <div

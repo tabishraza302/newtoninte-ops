@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen, fireEvent, waitFor } from '@testing-library/react'
+import { screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { renderWithProviders } from '../test/test-utils'
 import { ItemList } from './ItemList'
 import type { WorkItem } from '../api/types'
@@ -124,7 +124,8 @@ describe('ItemList Page (Task 3.8)', () => {
 
     const table = screen.getByRole('table', { name: 'Work items' })
     expect(table).toContainElement(screen.getByText('First issue'))
-    expect(screen.getAllByRole('cell')).toHaveLength(6)
+    expect(within(table).getByTestId('item-team-badge')).toHaveTextContent('Core Team')
+    expect(screen.getAllByRole('cell')).toHaveLength(7)
   })
 
   it('typing in the search box sends q', async () => {
@@ -246,5 +247,51 @@ describe('ItemList Page (Task 3.8)', () => {
     await waitFor(() => {
       expect(screen.getByText(/No items found/i)).toBeInTheDocument()
     })
+  })
+  it('hides "+ New Item" and "Create an Item" buttons when user is an administrator', async () => {
+    fetchMock.mockImplementation((urlStr: string | URL | Request) => {
+      const url = typeof urlStr === 'string' ? urlStr : urlStr.toString()
+
+      if (url.includes('/auth/me')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              user: { ...mockUser, isAdmin: true },
+              memberships: [{ teamId: 1, role: 'member' }],
+            }),
+            {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            },
+          ),
+        )
+      }
+      if (url.includes('/teams')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ teams: mockTeams }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      if (url.includes('/items')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ items: [], nextCursor: null }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      return Promise.reject(new Error(`Unhandled request: ${url}`))
+    })
+
+    renderWithProviders(<ItemList />)
+
+    await waitFor(() => {
+      expect(screen.getByText(/No items found/i)).toBeInTheDocument()
+    })
+
+    expect(screen.queryByRole('link', { name: /\+ New Item/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /Create an Item/i })).not.toBeInTheDocument()
   })
 })

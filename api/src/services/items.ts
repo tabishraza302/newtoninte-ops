@@ -41,6 +41,7 @@ export interface ListItemsQuery {
 export type WorkItemRow = typeof workItems.$inferSelect & {
   creator?: { id: number; displayName: string; email: string } | undefined
   assignee?: { id: number; displayName: string; email: string } | null | undefined
+  team?: { id: number; name: string; slug: string } | undefined
 }
 
 export type ActivityEventRow = typeof activityEvents.$inferSelect & {
@@ -172,9 +173,9 @@ export async function listItems(
   if (cursorCondition) {
     conditions.push(cursorCondition)
   }
-
   const creator = aliasedTable(users, 'creator')
   const assignee = aliasedTable(users, 'assignee')
+  const team = aliasedTable(teams, 'team')
 
   const rows = await db
     .select({
@@ -189,10 +190,16 @@ export async function listItems(
         displayName: assignee.displayName,
         email: assignee.email,
       },
+      team: {
+        id: team.id,
+        name: team.name,
+        slug: team.slug,
+      },
     })
     .from(workItems)
     .leftJoin(creator, eq(workItems.createdBy, creator.id))
     .leftJoin(assignee, eq(workItems.assigneeId, assignee.id))
+    .leftJoin(team, eq(workItems.teamId, team.id))
     .where(and(...conditions))
     .orderBy(
       sql`FIELD(${workItems.priority}, 'low', 'medium', 'high', 'urgent') DESC`,
@@ -205,6 +212,7 @@ export async function listItems(
     ...r.item,
     ...(r.creator?.id ? { creator: r.creator } : {}),
     assignee: r.assignee?.id ? r.assignee : null,
+    ...(r.team?.id ? { team: r.team } : {}),
   }))
 
   const pageResult = buildPage(
@@ -231,6 +239,7 @@ export async function listItems(
 export async function getItem(actor: Actor, id: number, executor: Tx | typeof db = db): Promise<WorkItemRow> {
   const creator = aliasedTable(users, 'creator')
   const assignee = aliasedTable(users, 'assignee')
+  const team = aliasedTable(teams, 'team')
 
   const [row] = await executor
     .select({
@@ -245,10 +254,16 @@ export async function getItem(actor: Actor, id: number, executor: Tx | typeof db
         displayName: assignee.displayName,
         email: assignee.email,
       },
+      team: {
+        id: team.id,
+        name: team.name,
+        slug: team.slug,
+      },
     })
     .from(workItems)
     .leftJoin(creator, eq(workItems.createdBy, creator.id))
     .leftJoin(assignee, eq(workItems.assigneeId, assignee.id))
+    .leftJoin(team, eq(workItems.teamId, team.id))
     .where(eq(workItems.id, id))
     .limit(1)
   if (!row) {
@@ -266,6 +281,7 @@ export async function getItem(actor: Actor, id: number, executor: Tx | typeof db
     ...row.item,
     ...(row.creator?.id ? { creator: row.creator } : {}),
     assignee: row.assignee?.id ? row.assignee : null,
+    ...(row.team?.id ? { team: row.team } : {}),
   }
 }
 
