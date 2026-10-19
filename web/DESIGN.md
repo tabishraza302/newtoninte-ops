@@ -240,3 +240,9 @@ Surfaces rely on structural 1px borders and tonal layering.
 - **Don't** mix multiple corner radius styles within the same component hierarchy.
 - **Don't** allow horizontal document-level scrolling on mobile viewports (keep tables contained).
 - **Don't** treat resolved as terminal (only closed and cancelled are terminal).
+
+## Item Detail
+
+- Use the 1200px page container with a flexible main column, 320px sidebar, and 1.5rem gap; stack the columns at viewport widths of 860px or less.
+- Keep the title, description, comment composer, and activity stream in the main column. Group workflow actions and the optional transition reason above key-value attributes in the sidebar.
+- Inline editing retains sidebar context. Assignment remains a modal dialog with keyboard focus containment and Escape dismissal.

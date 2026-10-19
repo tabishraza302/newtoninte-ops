@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen, waitFor, fireEvent } from '@testing-library/react'
+import { screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { Routes, Route } from 'react-router-dom'
 import { renderWithProviders } from '../test/test-utils'
 import { ItemDetail } from './ItemDetail'
@@ -449,5 +449,97 @@ describe('ItemDetail Page (Task 3.9)', () => {
     // Assignment and edit remain available for lead
     expect(screen.getByRole('button', { name: 'Assign' })).toBeEnabled()
     expect(screen.getByRole('button', { name: 'Edit' })).toBeEnabled()
+  })
+
+  it('toggles inline edit mode cleanly, preserving sidebar attributes and restoring title on cancel', async () => {
+    fetchMock.mockImplementation((input: string | URL | Request) => {
+      const url = String(input)
+      if (url.includes('/items/42/activity')) {
+        return Promise.resolve(new Response(JSON.stringify({ events: [], nextCursor: null }), { status: 200 }))
+      }
+      if (url.includes('/teams/1/members')) {
+        return Promise.resolve(new Response(JSON.stringify({ members: [], nextCursor: null }), { status: 200 }))
+      }
+      if (url.includes('/items/42')) {
+        return Promise.resolve(new Response(JSON.stringify({ item: mockItem }), { status: 200 }))
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }))
+    })
+
+    renderWithProviders(
+      <Routes>
+        <Route path="/items/:id" element={<ItemDetail userRole="lead" currentUser={{ id: 5, displayName: 'Dana Lead', email: 'dana@example.com' }} />} />
+      </Routes>,
+      { route: '/items/42' },
+    )
+
+    const editBtn = await screen.findByRole('button', { name: 'Edit' })
+    fireEvent.click(editBtn)
+
+    // Edit section should now be present
+    expect(screen.getByRole('region', { name: 'Edit Item' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Edit Item #42' })).toBeInTheDocument()
+
+    // Sidebar attributes should still be visible
+    expect(screen.getByTestId('item-status')).toHaveTextContent('in progress')
+    expect(screen.getByTestId('item-priority')).toHaveTextContent('urgent')
+
+    // Cancel edit using the form cancel button
+    const form = screen.getByTestId('item-form')
+    const cancelBtn = within(form).getByRole('button', { name: 'Cancel' })
+    fireEvent.click(cancelBtn)
+
+    // Title and description should be restored
+    expect(screen.getByTestId('item-title')).toHaveTextContent(mockItem.title)
+    expect(screen.getByTestId('item-description')).toHaveTextContent(mockItem.description!)
+  })
+
+  it('opens assign dialog on trigger click, enforces modal accessibility, and dismisses on Escape', async () => {
+    fetchMock.mockImplementation((input: string | URL | Request) => {
+      const url = String(input)
+      if (url.includes('/items/42/activity')) {
+        return Promise.resolve(new Response(JSON.stringify({ events: [], nextCursor: null }), { status: 200 }))
+      }
+      if (url.includes('/teams/1/members')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              members: [
+                { userId: 10, role: 'member', user: { id: 10, displayName: 'Charlie Engineer', email: 'charlie@example.com' } },
+                { userId: 5, role: 'lead', user: { id: 5, displayName: 'Dana Lead', email: 'dana@example.com' } },
+              ],
+              nextCursor: null,
+            }),
+            { status: 200 },
+          ),
+        )
+      }
+      if (url.includes('/items/42')) {
+        return Promise.resolve(new Response(JSON.stringify({ item: mockItem }), { status: 200 }))
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }))
+    })
+
+    renderWithProviders(
+      <Routes>
+        <Route path="/items/:id" element={<ItemDetail userRole="lead" currentUser={{ id: 5, displayName: 'Dana Lead', email: 'dana@example.com' }} />} />
+      </Routes>,
+      { route: '/items/42' },
+    )
+
+    const assignBtn = await screen.findByRole('button', { name: 'Assign' })
+    fireEvent.click(assignBtn)
+
+    // Modal dialog should be rendered
+    const dialog = screen.getByRole('dialog', { name: 'Assign Item #42' })
+    expect(dialog).toBeInTheDocument()
+    expect(screen.getByLabelText('Assignee')).toBeInTheDocument()
+
+    // Dismiss with Escape key
+    fireEvent.keyDown(window, { key: 'Escape' })
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    })
   })
 })
