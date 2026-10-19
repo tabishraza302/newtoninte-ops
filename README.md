@@ -1,5 +1,7 @@
 # Newtonite Ops
 
+[![CI](https://github.com/tabishraza302/newtoninte-ops/actions/workflows/ci.yml/badge.svg)](https://github.com/tabishraza302/newtoninte-ops/actions/workflows/ci.yml)
+
 A team-scoped operations workspace for creating, assigning, discussing, and resolving work items. It includes role-aware attention queues, an activity timeline, approval workflows, in-app notifications, and administrative controls.
 
 Built with Bun, TypeScript, Express, Drizzle/MySQL, React, TanStack Query, and Vite.
@@ -90,10 +92,12 @@ docker compose up -d mysql mailpit
 docker compose exec -T mysql mysql -uroot -proot -e 'CREATE DATABASE IF NOT EXISTS newtonite_test;'
 TEST_DATABASE_URL=mysql://root:root@127.0.0.1:3306/newtonite_test bun run test
 bun run typecheck
-bun --cwd web run build
+bun run --cwd web build
 ```
 
 The full test command runs API tests followed by web tests. API test files run sequentially to prevent shared-table resets from interfering. SMTP integration tests use Mailpit at `localhost:1025` and its HTTP API at `localhost:8025`. Web tests use jsdom; they are not a browser-rendering or load-test certification.
+
+CI runs the same steps on every push to `main` and every pull request: frozen install, typecheck, both suites (MySQL and Mailpit started as service containers), and the SPA build. See `.github/workflows/ci.yml`.
 
 | Guarantee | Representative regression coverage |
 | --- | --- |

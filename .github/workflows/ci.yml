@@ -59,5 +59,7 @@ jobs:
         run: bun run typecheck
       - name: Test
         run: bun run test
+      # `--cwd` must follow `run`. Placed before it, bun prints the script list
+      # and exits 0 without building anything.
       - name: Build the SPA
-        run: bun --cwd web run build
+        run: bun run --cwd web build
