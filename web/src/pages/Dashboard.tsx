@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { useItems, useTeams } from '../api/hooks'
 import type { ViewName, WorkItem } from '../api/types'
-import { ItemRow } from '../components/ItemRow'
+import { ItemRow, ItemTableGrid, ItemTableHeader } from '../components/ItemTable'
 import { commonStyles, theme, getApiErrorMessage } from '../theme'
 
 export const DASHBOARD_TABS: { key: ViewName; label: string; description: string }[] = [
@@ -230,33 +230,12 @@ export function Dashboard(): React.ReactElement {
             }}
           >
             <div style={{ overflowX: 'auto' }}>
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'minmax(80px, 100px) minmax(200px, 3fr) minmax(100px, 1.2fr) minmax(90px, 1fr) minmax(130px, 1.5fr) minmax(100px, 1.2fr)',
-                  padding: '0.75rem 1rem',
-                  backgroundColor: theme.colors.bgCardMuted,
-                  borderBottom: `1px solid ${theme.colors.border}`,
-                  fontSize: '0.75rem',
-                  fontWeight: 700,
-                  color: theme.colors.textSecondary,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.04em',
-                }}
-              >
-                <span>ID</span>
-                <span>Title</span>
-                <span>Status</span>
-                <span>Priority</span>
-                <span>Assignee</span>
-                <span style={{ textAlign: 'right' }}>Due</span>
-              </div>
-
-              <div>
+              <ItemTableGrid label="Work items">
+                <ItemTableHeader />
                 {items.map((item) => (
                   <ItemRow key={item.id} item={item} />
                 ))}
-              </div>
+              </ItemTableGrid>
             </div>
 
             {/* Keyset Cursor Pagination */}

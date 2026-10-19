@@ -202,11 +202,16 @@ Surfaces rely on structural 1px borders and tonal layering.
 - **Label Placement:** Bold label (`#334155`, font-weight 600, `0.8125rem`) positioned directly above the input with `0.375rem` margin.
 
 ### Status & Priority Pills
-- **Style:** Rounded full pill (`9999px`), inline-flex, padding `0.25rem 0.6rem`, font-size `0.75rem`, font-weight 600, letter-spacing `0.01em`, 1px solid border.
+- **Style:** `commonStyles.badgePill` — rounded full pill (`9999px`), inline-flex, padding `0.25rem 0.6rem`, font-size `0.75rem`, font-weight 600, `lineHeight: 1`, `textTransform: capitalize`, letter-spacing `0.01em`, `1px` border (transparent in the base style, recolored per status/priority by `getStatusBadgeStyle` / `getPriorityBadgeStyle`), single-line (`whiteSpace: nowrap`).
 
 ### Table Rows
-- **Style:** Flexbox row, padding `0.875rem 1.25rem`, border-bottom `1px solid #f1f5f9`, background white (`#ffffff`).
+- **Owner:** `web/src/components/ItemTable.tsx` owns `ItemTableGrid`, `ItemTableHeader` and `ItemRow`; `ItemList` and `Dashboard` both render their rows through that one component set, so their table chrome cannot diverge.
+- **Style:** The shared `ItemTableGrid` wrapper owns the 6-column CSS Grid template (`ITEM_TABLE_GRID_TEMPLATE`), column gap `1rem` and `minWidth: 'fit-content'`, and is exposed as a labelled `role="table"` (rows carry `role="row"`, cells `role="cell"`, header labels `role="columnheader"`). Header and rows align to those tracks with `grid-template-columns: subgrid` and `grid-column: 1 / -1`; browsers without subgrid resolve one uniform template instead (`ITEM_TABLE_FALLBACK_GRID_TEMPLATE`, no `max-content` tracks, supplied through `--item-table-columns`) on container, header and rows, moving the rows' horizontal inset onto the container so every column stays inside the container box. That fallback needs `var()`, which every browser the Vite build targets supports (`chrome87` / `firefox78` / `safari14` / `edge88`).
+- **Header Row:** Uppercase `0.75rem` labels in `theme.colors.textSecondary` on `theme.colors.bgCardMuted`, padding `0.75rem 1rem`, `1px` bottom border; the `Due` label is right-aligned.
+- **Row:** Padding `0.875rem 1rem`, border-bottom `1px solid #f1f5f9`, background white (`#ffffff`); every cell keeps `min-width: 0` so the flexible tracks shrink instead of overflowing into their neighbours.
+- **Columns:** 1: ID (`ui-monospace`, tabular figures), 2: Title (flexible `3fr`) over a sub-line with the capitalized item type and a `Team #<id>` chip (`#f1f5f9` on `#e2e8f0`, 4px radius), 3: Lifecycle status pill (`max-content`, dynamically sizes to content width without overlap), 4: Priority pill (`max-content`), 5: Assignee name (`1.5fr`, muted when unassigned), 6: Due date (tabular figures, right-aligned, `max-content`).
 - **Typography:** Monospace item ID (`ui-monospace`), tabular due date alignment.
+- **Long Titles:** Titles truncate with an ellipsis inside their column (single line, full text in the `title` tooltip) so overflowing text never paints over the status/priority pills.
 
 ### Administrative Teams
 - **Selection Above Roster:** A searchable, paginated team picker sits above one full-width members panel, rather than a permanent directory column beside the roster. On single-column layouts (viewport ≤1024px) selecting a team replaces the directory with a URL-backed drill-down — list ↔ detail, an "All teams" back control, and shareable `?team=<id>` links — and the roster renders member rows as cards whenever its own column is narrower than 640px. Cards keep the identity left and the role/removal controls stacked on the right; on phone-width cards the identity takes the full width and the two controls pair up beneath it.

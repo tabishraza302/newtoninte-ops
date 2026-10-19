@@ -60,6 +60,33 @@
       table {
         font-variant-numeric: tabular-nums;
       }
+      /* Rows/header share the grid container's column template via subgrid.
+         Without subgrid they cannot, so container, header and rows each resolve
+         one uniform template (--item-table-columns, no max-content tracks) and
+         the rows' horizontal inset moves onto the container, which keeps every
+         column inside the container box instead of painting past it.
+         Every browser the build targets supports custom properties (Vite
+         module target: chrome87/firefox78/safari14/edge88), so var() resolves
+         here. */
+      @supports not (grid-template-columns: subgrid) {
+        .item-table {
+          /* The container declares the primary template inline, so only an
+             important declaration can replace it with the fallback. */
+          grid-template-columns: var(--item-table-columns) !important;
+          padding-inline: 1rem;
+        }
+        .item-table-header,
+        .item-table-row {
+          /* Header/rows declare `subgrid` inline; that value is unsupported
+             here, so it is dropped and these plain declarations already win. */
+          grid-template-columns: var(--item-table-columns);
+          /* Their inline `padding: 0.875rem 1rem` is valid and only an
+             important declaration can override it; the horizontal half moves
+             to the container above so the columns stay inside the container
+             box. */
+          padding-inline: 0 !important;
+        }
+      }
       @media (prefers-reduced-motion: reduce) {
         *, *::before, *::after {
           animation-duration: 0.01ms !important;

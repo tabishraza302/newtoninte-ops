@@ -136,6 +136,10 @@ describe('Dashboard Page (Task 3.7)', () => {
     expect(screen.getByTestId('item-row-42')).toBeInTheDocument()
     expect(screen.getByText('Alice Engineer')).toBeInTheDocument()
     expect(screen.getByText('urgent')).toBeInTheDocument()
+
+    const table = screen.getByRole('table', { name: 'Work items' })
+    expect(table).toContainElement(screen.getByTestId('item-row-42'))
+    expect(screen.getAllByRole('cell')).toHaveLength(6)
   })
 
   it('supports cursor pagination via Load More button', async () => {

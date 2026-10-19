@@ -121,6 +121,10 @@ describe('ItemList Page (Task 3.8)', () => {
     await waitFor(() => {
       expect(screen.getByText('First issue')).toBeInTheDocument()
     })
+
+    const table = screen.getByRole('table', { name: 'Work items' })
+    expect(table).toContainElement(screen.getByText('First issue'))
+    expect(screen.getAllByRole('cell')).toHaveLength(6)
   })
 
   it('typing in the search box sends q', async () => {
