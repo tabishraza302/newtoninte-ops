@@ -70,7 +70,6 @@ describe('end-to-end auth flow (Task 2.19)', () => {
       .send({
         email: invitedEmail,
         role: 'member',
-        maxUses: 1,
       })
 
     expect(inviteRes.status).toBe(201)

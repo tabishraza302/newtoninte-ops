@@ -87,6 +87,11 @@ export interface WorkItem {
   updatedAt: string
   creator?: UserSummary
   assignee?: UserSummary | null
+  team?: {
+    id: number
+    name: string
+    slug?: string
+  } | null
 }
 
 export interface ActivityEvent {
@@ -332,7 +337,6 @@ export interface CreateInvitationInput {
   teamId: number
   email: string
   role: Role
-  maxUses?: number
 }
 
 export interface AdminTeamMember {

@@ -50,70 +50,81 @@ describe('invite race, last lead, and membership events tests (Task 2.21)', () =
   beforeEach(resetDb)
   afterAll(closeDb)
 
-  it('(a) §13 "Invite race": two parallel redeem() calls for a max_uses=1 invite with the same valid code+email -> exactly ONE succeeds (200), the other gets 409 (INVITE_EXHAUSTED or ALREADY_MEMBER), exactly one membership created, and uses === 1', async () => {
-    const team = await seedTeam({ name: 'Race Team', slug: 'race-team' })
-    const lead = await seedUser({ email: 'lead@race.test' })
-    await seedMembership(lead.id, team.id, 'lead')
-    const leadActor: Actor = { id: lead.id, isAdmin: false }
+  it.each([1, 5])(
+    '(a) §13 "Invite race": two parallel redeem() calls for an invite (stored max_uses=%i) with the same valid code+email -> exactly ONE succeeds (200), the other gets 409 (INVITE_EXHAUSTED or ALREADY_MEMBER), exactly one membership created, and uses === 1',
+    async (storedMaxUses) => {
+      const team = await seedTeam({ name: `Race Team ${storedMaxUses}`, slug: `race-team-${storedMaxUses}` })
+      const lead = await seedUser({ email: `lead-${storedMaxUses}@race.test` })
+      await seedMembership(lead.id, team.id, 'lead')
+      const leadActor: Actor = { id: lead.id, isAdmin: false }
 
-    const candidateEmail = 'candidate@race.test'
-    const inv = await createInvitation(leadActor, team.id, {
-      email: candidateEmail,
-      role: 'member',
-      maxUses: 1,
-    })
-    const code = await fetchOutboxInviteCode(inv.id)
-
-    // Launch two parallel redeem calls with the same code and email
-    const results = await Promise.allSettled([
-      redeem(null, {
-        code,
+      const candidateEmail = `candidate-${storedMaxUses}@race.test`
+      const inv = await createInvitation(leadActor, team.id, {
         email: candidateEmail,
-        password: 'Password123!',
-        displayName: 'Candidate 1',
-      }),
-      redeem(null, {
-        code,
-        email: candidateEmail,
-        password: 'Password123!',
-        displayName: 'Candidate 2',
-      }),
-    ])
+        role: 'member',
+      })
+      if (storedMaxUses !== 1) {
+        await pool.query('UPDATE invitations SET max_uses = ? WHERE id = ?', [storedMaxUses, inv.id])
+      }
+      const code = await fetchOutboxInviteCode(inv.id)
 
-    const fulfilled = results.filter(
-      (r): r is PromiseFulfilledResult<RedeemResult> =>
-        r.status === 'fulfilled',
-    )
-    const rejected = results.filter(
-      (r): r is PromiseRejectedResult => r.status === 'rejected',
-    )
+      // Launch two parallel redeem calls with the same code and email
+      const results = await Promise.allSettled([
+        redeem(null, {
+          code,
+          email: candidateEmail,
+          password: 'Password123!',
+          displayName: 'Candidate 1',
+        }),
+        redeem(null, {
+          code,
+          email: candidateEmail,
+          password: 'Password123!',
+          displayName: 'Candidate 2',
+        }),
+      ])
 
-    // Exactly one succeeds
-    expect(fulfilled).toHaveLength(1)
-    expect(rejected).toHaveLength(1)
+      const fulfilled = results.filter(
+        (r): r is PromiseFulfilledResult<RedeemResult> => r.status === 'fulfilled',
+      )
+      const rejected = results.filter(
+        (r): r is PromiseRejectedResult => r.status === 'rejected',
+      )
 
-    // The other gets 409 (either INVITE_EXHAUSTED or ALREADY_MEMBER)
-    const error = rejected[0]?.reason
-    expect(error).toBeInstanceOf(ApiError)
-    const apiError = error as ApiError
-    expect(apiError.status).toBe(409)
-    expect(['INVITE_EXHAUSTED', 'ALREADY_MEMBER']).toContain(apiError.code)
+      // Exactly one succeeds
+      expect(fulfilled).toHaveLength(1)
+      expect(rejected).toHaveLength(1)
 
-    // uses === 1 in DB
-    const [invRows] = await pool.query('SELECT uses FROM invitations WHERE id = ?', [inv.id])
-    expect((invRows as { uses: number }[])[0]?.uses).toBe(1)
+      // The other gets 409 (either INVITE_EXHAUSTED or ALREADY_MEMBER)
+      const error = rejected[0]?.reason
+      expect(error).toBeInstanceOf(ApiError)
+      const apiError = error as ApiError
+      expect(apiError.status).toBe(409)
+      expect(['INVITE_EXHAUSTED', 'ALREADY_MEMBER']).toContain(apiError.code)
 
-    // Exactly one membership created for this team (plus the original lead)
-    const [membershipRows] = await pool.query(
-      'SELECT id, role, user_id FROM memberships WHERE team_id = ?',
-      [team.id],
-    )
-    const members = membershipRows as { id: number; role: string; user_id: number }[]
-    expect(members).toHaveLength(2)
-    const nonLeadMembers = members.filter((m) => m.role === 'member')
-    expect(nonLeadMembers).toHaveLength(1)
-    expect(nonLeadMembers[0]?.user_id).toBe(fulfilled[0]!.value.user.id)
-  })
+      // uses === 1 in DB
+      const [invRows] = await pool.query('SELECT uses FROM invitations WHERE id = ?', [inv.id])
+      expect((invRows as { uses: number }[])[0]?.uses).toBe(1)
+
+      // Exactly one membership created for this team (plus the original lead)
+      const [membershipRows] = await pool.query(
+        'SELECT id, role, user_id FROM memberships WHERE team_id = ?',
+        [team.id],
+      )
+      const members = membershipRows as { id: number; role: string; user_id: number }[]
+      expect(members).toHaveLength(2)
+      const nonLeadMembers = members.filter((m) => m.role === 'member')
+      expect(nonLeadMembers).toHaveLength(1)
+      expect(nonLeadMembers[0]?.user_id).toBe(fulfilled[0]!.value.user.id)
+
+      // Exactly one invitee membership/joined event exists
+      const [eventRows] = await pool.query(
+        "SELECT * FROM membership_events WHERE team_id = ? AND subject_user_id = ? AND action = 'joined'",
+        [team.id, fulfilled[0]!.value.user.id],
+      )
+      expect((eventRows as unknown[]).length).toBe(1)
+    },
+  )
 
   it('(b) §13 "Last lead": demoting the only lead throws LAST_LEAD (422) and no membership row is changed', async () => {
     const team = await seedTeam({ name: 'Solo Team', slug: 'solo-team' })
@@ -158,7 +169,6 @@ describe('invite race, last lead, and membership events tests (Task 2.21)', () =
     const inv = await createInvitation(leadActor, team.id, {
       email: 'member@audit.test',
       role: 'member',
-      maxUses: 1,
     })
     const code = await fetchOutboxInviteCode(inv.id)
 

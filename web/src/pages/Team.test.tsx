@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen, fireEvent, waitFor } from '@testing-library/react'
+import { screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { Routes, Route } from 'react-router-dom'
 import { renderWithProviders } from '../test/test-utils'
 import { AuthContext, type AuthContextValue, type User } from '../auth/AuthContext'
@@ -85,6 +85,8 @@ describe('Team Page', () => {
   const setupFetch = (opts?: {
     userRole?: 'lead' | 'member' | 'viewer'
     roleChangeError?: string
+    inviteError?: { code: string; message: string; status?: number }
+    deferInvite?: () => Promise<Response>
   }) => {
     const role = opts?.userRole ?? 'lead'
     globalThis.fetch = vi.fn().mockImplementation((url: string | URL | Request, init?: RequestInit) => {
@@ -145,14 +147,26 @@ describe('Team Page', () => {
       }
 
       if (urlStr.includes('/teams/1/invitations') && init?.method === 'POST') {
+        if (opts?.deferInvite) {
+          return opts.deferInvite()
+        }
+        if (opts?.inviteError) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ error: opts.inviteError }),
+              { status: opts.inviteError.status ?? 422, headers: { 'Content-Type': 'application/json' } },
+            ),
+          )
+        }
+        const body = init?.body ? JSON.parse(init.body as string) : {}
         return Promise.resolve(
           new Response(
             JSON.stringify({
               invitation: {
                 id: 202,
                 teamId: 1,
-                email: 'invited@test.local',
-                role: 'member',
+                email: body.email || 'invited@test.local',
+                role: body.role || 'member',
                 uses: 0,
                 maxUses: 1,
                 expiresAt: null,
@@ -211,7 +225,234 @@ describe('Team Page', () => {
     expect(screen.getByRole('button', { name: /\+ Invite Member/i })).toBeInTheDocument()
   })
 
-  it('allows lead to send an invitation', async () => {
+  it('allows lead to send an invitation in an accessible modal with initial email focus and success feedback', async () => {
+    setupFetch({ userRole: 'lead' })
+
+    renderWithProviders(
+      <AuthContext.Provider value={createAuthContextValue()}>
+        <Team />
+      </AuthContext.Provider>,
+    )
+
+    const triggerBtn = await screen.findByRole('button', { name: /\+ Invite Member/i })
+    fireEvent.click(triggerBtn)
+
+    const dialog = screen.getByRole('dialog', { name: /Invite Member to Core Infrastructure/i })
+    expect(dialog).toBeInTheDocument()
+    expect(document.body.style.overflow).toBe('hidden')
+    expect(
+      within(dialog).getByText(/A single-use invitation link will be emailed to this address/i),
+    ).toBeInTheDocument()
+
+    const emailInput = within(dialog).getByLabelText(/Invitee Email Address/i)
+    expect(document.activeElement).toBe(emailInput)
+
+    fireEvent.change(emailInput, {
+      target: { value: 'invited@test.local' },
+    })
+    const roleSelect = within(dialog).getByLabelText(/Initial Team Role/i)
+    fireEvent.change(roleSelect, { target: { value: 'lead' } })
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /Send Invitation/i }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    })
+    expect(document.body.style.overflow).toBe('')
+
+    expect(screen.getByText(/Invitation sent to invited@test.local \(lead\)/i)).toBeInTheDocument()
+    expect(document.activeElement).toBe(triggerBtn)
+  })
+
+  it('supports modal dismissal via Cancel, Escape, Close button, and backdrop with focus restoration and draft reset', async () => {
+    setupFetch({ userRole: 'lead' })
+
+    renderWithProviders(
+      <AuthContext.Provider value={createAuthContextValue()}>
+        <Team />
+      </AuthContext.Provider>,
+    )
+
+    const triggerBtn = await screen.findByRole('button', { name: /\+ Invite Member/i })
+
+    // 1. Dismiss via Cancel button
+    fireEvent.click(triggerBtn)
+    let dialog = screen.getByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText(/Invitee Email Address/i), {
+      target: { value: 'draft-cancel@test.local' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: /Cancel/i }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(document.activeElement).toBe(triggerBtn)
+
+    // Verify draft reset
+    fireEvent.click(triggerBtn)
+    dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByLabelText(/Invitee Email Address/i)).toHaveValue('')
+
+    // 2. Dismiss via Escape key
+    fireEvent.change(within(dialog).getByLabelText(/Invitee Email Address/i), {
+      target: { value: 'draft-escape@test.local' },
+    })
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(document.activeElement).toBe(triggerBtn)
+
+    // Verify draft reset
+    fireEvent.click(triggerBtn)
+    dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByLabelText(/Invitee Email Address/i)).toHaveValue('')
+
+    // 3. Dismiss via Close icon button
+    fireEvent.click(within(dialog).getByRole('button', { name: /Close dialog/i }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(document.activeElement).toBe(triggerBtn)
+
+    // 4. Dismiss via backdrop click
+    fireEvent.click(triggerBtn)
+    dialog = screen.getByRole('dialog')
+    fireEvent.click(dialog.parentElement!)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(document.activeElement).toBe(triggerBtn)
+  })
+
+  it('traps focus within the modal with Tab and Shift+Tab wrap', async () => {
+    setupFetch({ userRole: 'lead' })
+
+    renderWithProviders(
+      <AuthContext.Provider value={createAuthContextValue()}>
+        <Team />
+      </AuthContext.Provider>,
+    )
+
+    const triggerBtn = await screen.findByRole('button', { name: /\+ Invite Member/i })
+    fireEvent.click(triggerBtn)
+
+    const dialog = screen.getByRole('dialog')
+    const closeBtn = within(dialog).getByRole('button', { name: /Close dialog/i })
+    const sendBtn = within(dialog).getByRole('button', { name: /Send Invitation/i })
+
+    // Tab from last focusable wraps to first
+    sendBtn.focus()
+    expect(document.activeElement).toBe(sendBtn)
+    fireEvent.keyDown(window, { key: 'Tab', shiftKey: false })
+    expect(document.activeElement).toBe(closeBtn)
+
+    // Shift+Tab from first focusable wraps to last
+    closeBtn.focus()
+    expect(document.activeElement).toBe(closeBtn)
+    fireEvent.keyDown(window, { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(sendBtn)
+  })
+
+  it('keeps modal and draft open when submission fails and displays error alert inside dialog', async () => {
+    setupFetch({
+      userRole: 'lead',
+      inviteError: { code: 'VALIDATION_ERROR', message: 'Invalid email address' },
+    })
+
+    renderWithProviders(
+      <AuthContext.Provider value={createAuthContextValue()}>
+        <Team />
+      </AuthContext.Provider>,
+    )
+
+    const triggerBtn = await screen.findByRole('button', { name: /\+ Invite Member/i })
+    fireEvent.click(triggerBtn)
+
+    const dialog = screen.getByRole('dialog')
+    const emailInput = within(dialog).getByLabelText(/Invitee Email Address/i)
+    fireEvent.change(emailInput, { target: { value: 'invalid@example.com' } })
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /Send Invitation/i }))
+
+    await waitFor(() => {
+      const alert = within(dialog).getByRole('alert')
+      expect(alert).toHaveTextContent(/Invalid email address/i)
+    })
+
+    expect(dialog).toBeInTheDocument()
+    expect(emailInput).toHaveValue('invalid@example.com')
+  })
+
+  it('disables controls and ignores dismissal during pending invitation submission', async () => {
+    let resolveInvite!: (res: Response) => void
+    const deferPromise = new Promise<Response>((resolve) => {
+      resolveInvite = resolve
+    })
+
+    setupFetch({
+      userRole: 'lead',
+      deferInvite: () => deferPromise,
+    })
+
+    renderWithProviders(
+      <AuthContext.Provider value={createAuthContextValue()}>
+        <Team />
+      </AuthContext.Provider>,
+    )
+
+    const triggerBtn = await screen.findByRole('button', { name: /\+ Invite Member/i })
+    fireEvent.click(triggerBtn)
+
+    const dialog = screen.getByRole('dialog')
+    const emailInput = within(dialog).getByLabelText(/Invitee Email Address/i)
+    const roleSelect = within(dialog).getByLabelText(/Initial Team Role/i)
+    const sendBtn = within(dialog).getByRole('button', { name: /Send Invitation/i })
+    const cancelBtn = within(dialog).getByRole('button', { name: /Cancel/i })
+    const closeBtn = within(dialog).getByRole('button', { name: /Close dialog/i })
+
+    fireEvent.change(emailInput, { target: { value: 'in-flight@test.local' } })
+    fireEvent.click(sendBtn)
+
+    // While pending
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Queuing Invitation…/i })).toBeDisabled()
+    })
+    expect(emailInput).toBeDisabled()
+    expect(roleSelect).toBeDisabled()
+    expect(cancelBtn).toBeDisabled()
+    expect(closeBtn).toBeDisabled()
+
+    // Escape should not close dialog
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+
+    // Backdrop click should not close dialog
+    fireEvent.click(dialog.parentElement!)
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+
+    // Tab key keeps focus trapped on the dialog container
+    fireEvent.keyDown(window, { key: 'Tab' })
+    expect(document.activeElement).toBe(dialog)
+
+    // Resolve deferred promise
+    resolveInvite(
+      new Response(
+        JSON.stringify({
+          invitation: {
+            id: 205,
+            teamId: 1,
+            email: 'in-flight@test.local',
+            role: 'member',
+            uses: 0,
+            maxUses: 1,
+            expiresAt: null,
+            revokedAt: null,
+            createdAt: new Date().toISOString(),
+          },
+        }),
+        { status: 201, headers: { 'Content-Type': 'application/json' } },
+      ),
+    )
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    })
+    expect(screen.getByText(/Invitation sent to in-flight@test.local/i)).toBeInTheDocument()
+  })
+
+  it('renders Status column header and dash for non-active invitation actions', async () => {
     setupFetch({ userRole: 'lead' })
 
     renderWithProviders(
@@ -221,24 +462,9 @@ describe('Team Page', () => {
     )
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /\+ Invite Member/i })).toBeInTheDocument()
+      expect(screen.getByRole('columnheader', { name: 'Status' })).toBeInTheDocument()
     })
-
-    fireEvent.click(screen.getByRole('button', { name: /\+ Invite Member/i }))
-
-    expect(screen.getByLabelText(/Invitee Email Address/i)).toBeInTheDocument()
-
-    fireEvent.change(screen.getByLabelText(/Invitee Email Address/i), {
-      target: { value: 'invited@test.local' },
-    })
-
-    fireEvent.click(screen.getByRole('button', { name: /Send Invitation/i }))
-
-    await waitFor(() => {
-      expect(screen.getByRole('status')).toBeInTheDocument()
-    })
-
-    expect(screen.getByText(/Invitation sent to invited@test.local/i)).toBeInTheDocument()
+    expect(screen.getByText('Active')).toBeInTheDocument()
   })
 
   it('handles LAST_LEAD error when demoting the only lead', async () => {

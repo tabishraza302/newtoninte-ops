@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import {
   useMe,
@@ -47,13 +47,18 @@ export function Team(): React.ReactElement {
   const userRole: Role = currentMembership?.role ?? 'viewer'
   const isLead = userRole === 'lead'
   // Invitations state
-  const [showInviteForm, setShowInviteForm] = useState(false)
+  const [showInviteModal, setShowInviteModal] = useState(false)
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteRole, setInviteRole] = useState<Role>('member')
-  const [inviteMaxUses, setInviteMaxUses] = useState<number>(1)
   const [inviteError, setInviteError] = useState<string | null>(null)
   const [inviteSuccess, setInviteSuccess] = useState<string | null>(null)
 
+  const inviteTriggerRef = useRef<HTMLButtonElement>(null)
+  const inviteModalRef = useRef<HTMLDivElement>(null)
+  const inviteEmailInputRef = useRef<HTMLInputElement>(null)
+  const wasInviteOpenRef = useRef(false)
+  const sectionRef = useRef<HTMLDivElement>(null)
+  const [sectionCenter, setSectionCenter] = useState<{ x: number; y: number } | null>(null)
   // Member actions error/success
   const [memberActionError, setMemberActionError] = useState<string | null>(null)
   const [memberActionSuccess, setMemberActionSuccess] = useState<string | null>(null)
@@ -98,7 +103,9 @@ export function Team(): React.ReactElement {
     setMemberActionSuccess(null)
     setInviteError(null)
     setInviteSuccess(null)
-    setShowInviteForm(false)
+    setShowInviteModal(false)
+    setInviteEmail('')
+    setInviteRole('member')
   }, [activeTeamId])
 
   // Accumulate invitations as pages are loaded
@@ -130,6 +137,113 @@ export function Team(): React.ReactElement {
       }
     }
   }, [membersData, memberCursor])
+
+  useEffect(() => {
+    if (!showInviteModal && wasInviteOpenRef.current) {
+      inviteTriggerRef.current?.focus()
+    }
+    wasInviteOpenRef.current = showInviteModal
+  }, [showInviteModal])
+
+  useEffect(() => {
+    if (showInviteModal && isLead) {
+      inviteEmailInputRef.current?.focus()
+    }
+  }, [showInviteModal, isLead])
+
+  useEffect(() => {
+    if (!showInviteModal || !isLead) return
+    const mainColumn = document.querySelector<HTMLElement>('.app-main-column')
+    const originalOverflow = document.body.style.overflow
+    const originalMainOverflow = mainColumn?.style.overflowY ?? ''
+    // The app shell scrolls inside .app-main-column, not body, so lock both.
+    document.body.style.overflow = 'hidden'
+    if (mainColumn) mainColumn.style.overflowY = 'hidden'
+    return () => {
+      document.body.style.overflow = originalOverflow
+      if (mainColumn) mainColumn.style.overflowY = originalMainOverflow
+    }
+  }, [showInviteModal, isLead])
+
+
+  useEffect(() => {
+    if (!showInviteModal) return
+
+    const updateCenter = (): void => {
+      if (!sectionRef.current) return
+      const rect = sectionRef.current.getBoundingClientRect()
+      if (rect.width === 0) return
+      const centerX = rect.left + rect.width / 2
+      const visibleTop = Math.max(rect.top, 0)
+      const visibleBottom = Math.min(rect.bottom, window.innerHeight)
+      const centerY = visibleBottom > visibleTop ? (visibleTop + visibleBottom) / 2 : rect.top + rect.height / 2
+      setSectionCenter({ x: centerX, y: centerY })
+    }
+
+    updateCenter()
+    window.addEventListener('resize', updateCenter)
+    window.addEventListener('scroll', updateCenter, true)
+    return () => {
+      window.removeEventListener('resize', updateCenter)
+      window.removeEventListener('scroll', updateCenter, true)
+    }
+  }, [showInviteModal])
+  useEffect(() => {
+    if (!showInviteModal || !isLead) return
+
+    const handleKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        if (createInviteMutation.isPending) return
+        e.preventDefault()
+        setShowInviteModal(false)
+        setInviteEmail('')
+        setInviteRole('member')
+        setInviteError(null)
+        return
+      }
+
+      if (e.key === 'Tab') {
+        const focusables = Array.from(
+          inviteModalRef.current?.querySelectorAll<HTMLElement>(
+            'select:not([disabled]), button:not([disabled]), input:not([disabled]), [href], textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+          ) ?? [],
+        )
+
+        if (focusables.length === 0) {
+          e.preventDefault()
+          inviteModalRef.current?.focus()
+          return
+        }
+
+        const first = focusables[0]
+        const last = focusables[focusables.length - 1]
+        if (!first || !last) return
+
+        if (e.shiftKey) {
+          if (document.activeElement === first || !inviteModalRef.current?.contains(document.activeElement)) {
+            e.preventDefault()
+            last.focus()
+          }
+        } else {
+          if (document.activeElement === last || !inviteModalRef.current?.contains(document.activeElement)) {
+            e.preventDefault()
+            first.focus()
+          }
+        }
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [showInviteModal, isLead, createInviteMutation.isPending])
+
+  const handleCloseInviteModal = (): void => {
+    if (createInviteMutation.isPending) return
+    setShowInviteModal(false)
+    setInviteEmail('')
+    setInviteRole('member')
+    setInviteError(null)
+  }
 
   const handleRoleChange = async (member: TeamMember, newRole: Role): Promise<void> => {
     if (!activeTeamId || member.role === newRole) return
@@ -181,7 +295,6 @@ export function Team(): React.ReactElement {
     if (!activeTeamId) return
 
     setInviteError(null)
-    setInviteSuccess(null)
 
     const trimmedEmail = inviteEmail.trim()
     if (!trimmedEmail) {
@@ -194,14 +307,12 @@ export function Team(): React.ReactElement {
         teamId: activeTeamId,
         email: trimmedEmail,
         role: inviteRole,
-        maxUses: inviteMaxUses > 0 ? inviteMaxUses : 1,
       })
 
       setInviteSuccess(`Invitation sent to ${trimmedEmail} (${inviteRole}).`)
       setInviteEmail('')
       setInviteRole('member')
-      setInviteMaxUses(1)
-      setShowInviteForm(false)
+      setShowInviteModal(false)
       setInviteCursor(undefined)
       if (res?.invitation) {
         setAllInvitations((prev) => [res.invitation, ...prev.filter((i) => i.id !== res.invitation.id)])
@@ -348,7 +459,14 @@ export function Team(): React.ReactElement {
   }
 
   return (
-    <div className="team-page" style={commonStyles.pageContainer}>
+    <>
+      <div
+        ref={sectionRef}
+        className="team-page"
+        style={commonStyles.pageContainer}
+        inert={showInviteModal && isLead ? true : undefined}
+        aria-hidden={showInviteModal && isLead ? 'true' : undefined}
+      >
       {/* Team Selection Bar if multiple teams */}
       {teams.length > 1 && (
         <nav
@@ -443,122 +561,22 @@ export function Team(): React.ReactElement {
 
         {isLead && (
           <button
+            ref={inviteTriggerRef}
             type="button"
             onClick={() => {
-              setShowInviteForm((prev) => !prev)
               setInviteError(null)
               setInviteSuccess(null)
+              setInviteEmail('')
+              setInviteRole('member')
+              setShowInviteModal(true)
             }}
             style={commonStyles.buttonPrimary}
           >
-            <span>{showInviteForm ? '− Cancel Invite' : '+ Invite Member'}</span>
+            <span>+ Invite Member</span>
           </button>
         )}
       </header>
 
-      {/* Lead invitation form */}
-      {showInviteForm && isLead && (
-        <section
-          aria-label="Invite new team member"
-          style={{
-            ...commonStyles.cardPadded,
-            marginBottom: '1.75rem',
-            border: `1px solid ${theme.colors.accentBorder}`,
-            backgroundColor: '#ffffff',
-          }}
-        >
-          <h2 style={{ fontSize: '1.125rem', fontWeight: 700, color: theme.colors.textPrimary, margin: '0 0 0.35rem' }}>
-            Invite Member to {activeTeam?.name}
-          </h2>
-          <p style={{ fontSize: '0.8125rem', color: theme.colors.textMuted, margin: '0 0 1.25rem' }}>
-            A single-use invitation link will be queued for delivery via email. The recipient can redeem it to join.
-          </p>
-
-          {inviteError && (
-            <div role="alert" style={{ ...commonStyles.alertError, marginBottom: '1rem' }}>
-              {inviteError}
-            </div>
-          )}
-
-          <form onSubmit={(e) => void handleCreateInvitation(e)}>
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-                gap: '1rem',
-                marginBottom: '1.25rem',
-              }}
-            >
-              <div>
-                <label htmlFor="invite-email" style={commonStyles.label}>
-                  Invitee Email Address *
-                </label>
-                <input
-                  id="invite-email"
-                  type="email"
-                  required
-                  placeholder="colleague@company.com"
-                  value={inviteEmail}
-                  onChange={(e) => setInviteEmail(e.target.value)}
-                  style={commonStyles.input}
-                />
-              </div>
-
-              <div>
-                <label htmlFor="invite-role" style={commonStyles.label}>
-                  Initial Team Role *
-                </label>
-                <select
-                  id="invite-role"
-                  value={inviteRole}
-                  onChange={(e) => setInviteRole(e.target.value as Role)}
-                  style={commonStyles.select}
-                >
-                  <option value="member">Member (create, edit, claim, comment)</option>
-                  <option value="lead">Lead (full team management & approval)</option>
-                  <option value="viewer">Viewer (read-only access)</option>
-                </select>
-              </div>
-
-              <div>
-                <label htmlFor="invite-max-uses" style={commonStyles.label}>
-                  Max Uses
-                </label>
-                <input
-                  id="invite-max-uses"
-                  type="number"
-                  min="1"
-                  max="100"
-                  value={inviteMaxUses}
-                  onChange={(e) => setInviteMaxUses(parseInt(e.target.value, 10) || 1)}
-                  style={commonStyles.input}
-                />
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-              <button
-                type="button"
-                onClick={() => setShowInviteForm(false)}
-                style={commonStyles.buttonSecondary}
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={createInviteMutation.isPending}
-                style={{
-                  ...commonStyles.buttonPrimary,
-                  opacity: createInviteMutation.isPending ? 0.7 : 1,
-                  cursor: createInviteMutation.isPending ? 'not-allowed' : 'pointer',
-                }}
-              >
-                {createInviteMutation.isPending ? 'Queuing Invitation…' : 'Send Invitation'}
-              </button>
-            </div>
-          </form>
-        </section>
-      )}
 
       {/* Status Messages */}
       {inviteSuccess && (
@@ -909,7 +927,7 @@ export function Team(): React.ReactElement {
                     >
                       <th style={{ padding: '0.75rem 1rem' }}>Invited Email</th>
                       <th style={{ padding: '0.75rem 1rem' }}>Target Role</th>
-                      <th style={{ padding: '0.75rem 1rem' }}>Usage</th>
+                      <th style={{ padding: '0.75rem 1rem' }}>Status</th>
                       <th style={{ padding: '0.75rem 1rem' }}>Expires</th>
                       <th style={{ padding: '0.75rem 1rem', textAlign: 'right' }}>Actions</th>
                     </tr>
@@ -918,7 +936,7 @@ export function Team(): React.ReactElement {
                     {allInvitations.map((inv) => {
                       const isRevoked = !!inv.revokedAt
                       const isExpired = inv.expiresAt ? new Date(inv.expiresAt) < new Date() : false
-                      const isExhausted = inv.uses >= inv.maxUses
+                      const isExhausted = inv.uses >= 1
 
                       let statusBadge = (
                         <span style={{ color: '#047857', fontWeight: 600, fontSize: '0.75rem' }}>Active</span>
@@ -960,8 +978,8 @@ export function Team(): React.ReactElement {
                               {inv.role}
                             </span>
                           </td>
-                          <td style={{ padding: '0.85rem 1rem', fontVariantNumeric: 'tabular-nums', color: theme.colors.textSecondary }}>
-                            {inv.uses} / {inv.maxUses} uses
+                          <td style={{ padding: '0.85rem 1rem' }}>
+                            {statusBadge}
                           </td>
                           <td style={{ padding: '0.85rem 1rem', fontVariantNumeric: 'tabular-nums', color: theme.colors.textMuted, fontSize: '0.8125rem' }}>
                             {inv.expiresAt ? new Date(inv.expiresAt).toLocaleDateString() : 'Never'}
@@ -988,7 +1006,7 @@ export function Team(): React.ReactElement {
                                 Revoke
                               </button>
                             ) : (
-                              statusBadge
+                              <span style={{ color: theme.colors.textMuted }}>—</span>
                             )}
                           </td>
                         </tr>
@@ -1025,6 +1043,195 @@ export function Team(): React.ReactElement {
           )}
         </section>
       )}
-    </div>
+      </div>
+      {showInviteModal && isLead && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(15, 23, 42, 0.45)',
+            backdropFilter: 'blur(2px)',
+            zIndex: 100,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '1rem',
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !createInviteMutation.isPending) {
+              handleCloseInviteModal()
+            }
+          }}
+        >
+          <div
+            ref={inviteModalRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="invite-member-title"
+            aria-describedby="invite-member-description"
+            tabIndex={-1}
+            style={{
+              position: 'absolute',
+              left: sectionCenter
+                ? `${sectionCenter.x}px`
+                : typeof window !== 'undefined' && window.innerWidth <= 768
+                  ? '50vw'
+                  : 'calc(50vw + 128px)',
+              top: sectionCenter ? `${sectionCenter.y}px` : '50vh',
+              transform: 'translate(-50%, -50%)',
+              backgroundColor: '#ffffff',
+              border: `1px solid ${theme.colors.border}`,
+              borderRadius: '12px',
+              padding: '1.75rem',
+              boxSizing: 'border-box',
+              width: 'min(520px, calc(100vw - 2rem))',
+              maxWidth: '520px',
+              maxHeight: 'calc(100dvh - 2rem)',
+              overflowY: 'auto',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+              outline: 'none',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'flex-start',
+                gap: '1rem',
+                marginBottom: '1.25rem',
+              }}
+            >
+              <div>
+                <h2
+                  id="invite-member-title"
+                  style={{
+                    fontSize: '1.125rem',
+                    fontWeight: 700,
+                    color: theme.colors.textPrimary,
+                    margin: '0 0 0.35rem',
+                  }}
+                >
+                  Invite Member to {activeTeam?.name}
+                </h2>
+                <p
+                  id="invite-member-description"
+                  style={{
+                    fontSize: '0.8125rem',
+                    color: theme.colors.textMuted,
+                    margin: 0,
+                  }}
+                >
+                  A single-use invitation link will be emailed to this address. Only the invited account can redeem it.
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-label="Close dialog"
+                disabled={createInviteMutation.isPending}
+                onClick={handleCloseInviteModal}
+                style={{
+                  ...commonStyles.buttonSecondary,
+                  padding: '0.35rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                  lineHeight: 1,
+                  cursor: createInviteMutation.isPending ? 'not-allowed' : 'pointer',
+                  opacity: createInviteMutation.isPending ? 0.6 : 1,
+                }}
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" focusable="false">
+                  <path
+                    d="M4.5 4.5l7 7m0-7l-7 7"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
+            </div>
+
+            {inviteError && (
+              <div role="alert" style={{ ...commonStyles.alertError, marginBottom: '1.25rem' }}>
+                {inviteError}
+              </div>
+            )}
+
+            <form onSubmit={(e) => void handleCreateInvitation(e)}>
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '1rem',
+                  marginBottom: '1.5rem',
+                }}
+              >
+                <div>
+                  <label htmlFor="invite-email" style={commonStyles.label}>
+                    Invitee Email Address *
+                  </label>
+                  <input
+                    ref={inviteEmailInputRef}
+                    id="invite-email"
+                    type="email"
+                    required
+                    disabled={createInviteMutation.isPending}
+                    placeholder="colleague@company.com"
+                    value={inviteEmail}
+                    onChange={(e) => setInviteEmail(e.target.value)}
+                    style={commonStyles.input}
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="invite-role" style={commonStyles.label}>
+                    Initial Team Role *
+                  </label>
+                  <select
+                    id="invite-role"
+                    value={inviteRole}
+                    disabled={createInviteMutation.isPending}
+                    onChange={(e) => setInviteRole(e.target.value as Role)}
+                    style={commonStyles.select}
+                  >
+                    <option value="member">Member (create, edit, claim, comment)</option>
+                    <option value="lead">Lead (full team management & approval)</option>
+                    <option value="viewer">Viewer (read-only access)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  disabled={createInviteMutation.isPending}
+                  onClick={handleCloseInviteModal}
+                  style={{
+                    ...commonStyles.buttonSecondary,
+                    cursor: createInviteMutation.isPending ? 'not-allowed' : 'pointer',
+                    opacity: createInviteMutation.isPending ? 0.6 : 1,
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={createInviteMutation.isPending}
+                  style={{
+                    ...commonStyles.buttonPrimary,
+                    opacity: createInviteMutation.isPending ? 0.7 : 1,
+                    cursor: createInviteMutation.isPending ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {createInviteMutation.isPending ? 'Queuing Invitation…' : 'Send Invitation'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </>
   )
 }

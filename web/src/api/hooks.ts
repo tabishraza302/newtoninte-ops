@@ -645,10 +645,10 @@ export function useCreateInvitation(): UseMutationResult<
     Error,
     CreateInvitationInput
   >({
-    mutationFn: ({ teamId, email, role, maxUses }) =>
+    mutationFn: ({ teamId, email, role }) =>
       apiFetch<{ invitation: TeamInvitation }>(`/teams/${teamId}/invitations`, {
         method: 'POST',
-        json: { email, role, ...(maxUses !== undefined ? { maxUses } : {}) },
+        json: { email, role },
       }),
     onSuccess: (_data, vars) => {
       void queryClient.invalidateQueries({ queryKey: ['teams', vars.teamId, 'invitations'] })

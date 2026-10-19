@@ -37,11 +37,12 @@ const setMemberRoleSchema = z.object({
   role: z.enum(ROLES),
 })
 
-const createInvitationSchema = z.object({
-  email: z.string().trim().email(),
-  role: z.enum(ROLES),
-  maxUses: z.number().int().positive().optional(),
-})
+const createInvitationSchema = z
+  .object({
+    email: z.string().trim().email(),
+    role: z.enum(ROLES),
+  })
+  .strict()
 
 teamsRouter.get('/teams', requireAuth(), async (req: Request, res: Response, next) => {
   try {

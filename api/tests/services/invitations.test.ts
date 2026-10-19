@@ -75,7 +75,6 @@ describe('invitations service (part 1: create / list / revoke)', () => {
     const invitation = await createInvitation(leadActor, team.id, {
       email: 'invitee@example.test',
       role: 'member',
-      maxUses: 1,
     })
 
     expect(invitation.id).toBeGreaterThan(0)
@@ -162,7 +161,7 @@ describe('invitations service (part 1: create / list / revoke)', () => {
     }
   })
 
-  it('createInvitation normalizes email and enforces valid maxUses', async () => {
+  it('createInvitation normalizes email', async () => {
     const team = await seedTeam()
     const lead = await seedUser({ email: 'lead-norm@example.test' })
     await seedMembership(lead.id, team.id, 'lead')
@@ -173,14 +172,5 @@ describe('invitations service (part 1: create / list / revoke)', () => {
       role: 'member',
     })
     expect(inv.email).toBe('mixedcaseinvite@example.com')
-
-    // Invalid maxUses
-    await expect(
-      createInvitation(leadActor, team.id, {
-        email: 'test@example.com',
-        role: 'member',
-        maxUses: 0,
-      }),
-    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
   })
 })

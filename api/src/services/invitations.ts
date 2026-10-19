@@ -32,7 +32,7 @@ function toInvitationView(row: typeof invitations.$inferSelect): InvitationView 
     teamId: row.teamId,
     role: row.role,
     email: row.email,
-    maxUses: row.maxUses,
+    maxUses: 1,
     uses: row.uses,
     expiresAt: row.expiresAt,
     createdBy: row.createdBy,
@@ -51,16 +51,13 @@ function toInvitationView(row: typeof invitations.$inferSelect): InvitationView 
 export async function createInvitation(
   actor: Actor,
   teamId: number,
-  input: { email: string; role: Role; maxUses?: number | undefined },
+  input: { email: string; role: Role },
 ): Promise<InvitationView> {
   await authorize(actor, 'invitation:manage', { kind: 'team', teamId })
 
   const normalizedEmail = input.email.trim().toLowerCase()
   if (!normalizedEmail || !normalizedEmail.includes('@')) {
     throw ApiError.of('VALIDATION_ERROR', 'Invalid email address')
-  }
-  if (input.maxUses !== undefined && (!Number.isInteger(input.maxUses) || input.maxUses < 1)) {
-    throw ApiError.of('VALIDATION_ERROR', 'maxUses must be a positive integer')
   }
 
   return withTransaction(async (tx) => {
@@ -85,7 +82,7 @@ export async function createInvitation(
       role: input.role,
       email: normalizedEmail,
       codeHash,
-      maxUses: input.maxUses ?? 1,
+      maxUses: 1,
       uses: 0,
       expiresAt: sql`DATE_ADD(CURRENT_TIMESTAMP(3), INTERVAL ${config.inviteTtlDays} DAY)`,
       createdBy: actor.id,
@@ -338,7 +335,7 @@ export async function redeem(
       .where(
         and(
           eq(invitations.id, invitation.id),
-          sql`uses < max_uses`,
+          eq(invitations.uses, 0),
           isNull(invitations.revokedAt),
           gt(invitations.expiresAt, sql`CURRENT_TIMESTAMP(3)`),
         ),
@@ -355,7 +352,7 @@ export async function redeem(
       if (!latest || latest.revokedAt !== null) {
         throw ApiError.of('INVITE_REVOKED')
       }
-      if (latest.uses >= latest.maxUses) {
+      if (latest.uses >= 1) {
         throw ApiError.of('INVITE_EXHAUSTED')
       }
       throw ApiError.of('INVITE_EXPIRED')

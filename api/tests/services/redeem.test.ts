@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterAll } from 'vitest'
 import { resetDb, seedUser, seedTeam, seedMembership } from '../helpers/db'
 import { closeDb, pool } from '../../src/db/client'
 import { createInvitation, redeem } from '../../src/services/invitations'
+import { removeMember } from '../../src/services/memberships'
 import { hashPassword } from '../../src/services/crypto'
 import { ApiError } from '../../src/http/errors'
 import type { Actor } from '../../src/domain/types'
@@ -215,12 +216,22 @@ describe('invitations service: redeem (Task 2.10)', () => {
     const invExhausted = await createInvitation(leadActor, team.id, {
       email: 'exh@example.test',
       role: 'viewer',
-      maxUses: 1,
     })
     const codeExh = await fetchOutboxInviteCode(invExhausted.id)
     await pool.query('UPDATE invitations SET uses = 1 WHERE id = ?', [invExhausted.id])
     expect(
       await errorCode(() => redeem(null, { code: codeExh, email: 'exh@example.test', password: 'Password123!' })),
+    ).toBe('INVITE_EXHAUSTED')
+
+    // Historical row with uses = 2 is exhausted
+    const invExhausted2 = await createInvitation(leadActor, team.id, {
+      email: 'exh2@example.test',
+      role: 'viewer',
+    })
+    const codeExh2 = await fetchOutboxInviteCode(invExhausted2.id)
+    await pool.query('UPDATE invitations SET max_uses = 5, uses = 2 WHERE id = ?', [invExhausted2.id])
+    expect(
+      await errorCode(() => redeem(null, { code: codeExh2, email: 'exh2@example.test', password: 'Password123!' })),
     ).toBe('INVITE_EXHAUSTED')
   })
 
@@ -296,5 +307,53 @@ describe('invitations service: redeem (Task 2.10)', () => {
         }),
       ),
     ).toBe('VALIDATION_ERROR')
+  })
+
+  it('enforces single-use on historical invitations with max_uses > 1 even after member is removed', async () => {
+    const team = await seedTeam({ name: 'Historical Team' })
+    const lead = await seedUser({ email: 'lead-hist@example.test' })
+    await seedMembership(lead.id, team.id, 'lead')
+    const leadActor: Actor = { id: lead.id, isAdmin: false }
+
+    const inv = await createInvitation(leadActor, team.id, {
+      email: 'historical@example.test',
+      role: 'member',
+    })
+    // Simulate historical row with max_uses = 5
+    await pool.query('UPDATE invitations SET max_uses = 5 WHERE id = ?', [inv.id])
+    const code = await fetchOutboxInviteCode(inv.id)
+
+    // First redemption succeeds
+    const result = await redeem(null, {
+      code,
+      email: 'historical@example.test',
+      password: 'password123',
+    })
+    expect(result.teamId).toBe(team.id)
+
+    // Remove the member as lead
+    await removeMember(leadActor, team.id, result.user.id)
+
+    // Try redeeming the same token again as the invitee
+    const userActor: Actor = { id: result.user.id, isAdmin: false }
+    expect(await errorCode(() => redeem(userActor, { code }))).toBe('INVITE_EXHAUSTED')
+
+    // Verify usage still 1
+    const [invRows] = await pool.query('SELECT uses FROM invitations WHERE id = ?', [inv.id])
+    expect((invRows as { uses: number }[])[0]!.uses).toBe(1)
+
+    // No replacement membership
+    const [memRows] = await pool.query(
+      'SELECT * FROM memberships WHERE team_id = ? AND user_id = ?',
+      [team.id, result.user.id],
+    )
+    expect((memRows as unknown[]).length).toBe(0)
+
+    // Exactly one joined event exists (no second joined event)
+    const [eventRows] = await pool.query(
+      "SELECT * FROM membership_events WHERE team_id = ? AND subject_user_id = ? AND action = 'joined'",
+      [team.id, result.user.id],
+    )
+    expect((eventRows as unknown[]).length).toBe(1)
   })
 })

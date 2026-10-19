@@ -33,7 +33,6 @@ describe('Teams and Invitations routes (Task 2.17)', () => {
     const inv = await createInvitation(leadActor, team.id, {
       email: 'newbie@example.test',
       role: 'member',
-      maxUses: 5,
     })
     const code = await fetchOutboxInviteCode(inv.id)
 
@@ -102,7 +101,6 @@ describe('Teams and Invitations routes (Task 2.17)', () => {
       .send({
         email: 'invitee2@alpha.test',
         role: 'member',
-        maxUses: 2,
       })
 
     expect(resLead.status).toBe(201)
@@ -111,6 +109,66 @@ describe('Teams and Invitations routes (Task 2.17)', () => {
     expect(resLead.body.invitation.role).toBe('member')
     expect(resLead.body.invitation.teamId).toBe(team.id)
     expect(resLead.body.invitation.codeHash).toBeUndefined()
+  })
+
+  it.each([1, 2, 0])('POST /teams/:id/invitations rejects maxUses=%i with 422 VALIDATION_ERROR and creates neither invitation nor outbox job', async (maxUses) => {
+    const team = await seedTeam({ name: 'Strict Team', slug: `strict-${maxUses}` })
+    const lead = await seedUser({ email: `lead-strict-${maxUses}@strict.test` })
+    await seedMembership(lead.id, team.id, 'lead')
+    const leadToken = await signAccessToken(lead.id)
+
+    const [invCountBefore] = await pool.query('SELECT COUNT(*) as cnt FROM invitations')
+    const [jobCountBefore] = await pool.query('SELECT COUNT(*) as cnt FROM outbox_jobs')
+
+    const res = await request(app)
+      .post(`/teams/${team.id}/invitations`)
+      .set('Authorization', `Bearer ${leadToken}`)
+      .send({
+        email: `reject-${maxUses}@strict.test`,
+        role: 'member',
+        maxUses,
+      })
+
+    expect(res.status).toBe(422)
+    expect(res.body.error.code).toBe('VALIDATION_ERROR')
+
+    const [invCountAfter] = await pool.query('SELECT COUNT(*) as cnt FROM invitations')
+    const [jobCountAfter] = await pool.query('SELECT COUNT(*) as cnt FROM outbox_jobs')
+    expect((invCountAfter as { cnt: number }[])[0]!.cnt).toBe((invCountBefore as { cnt: number }[])[0]!.cnt)
+    expect((jobCountAfter as { cnt: number }[])[0]!.cnt).toBe((jobCountBefore as { cnt: number }[])[0]!.cnt)
+  })
+
+  it('POST and GET /teams/:id/invitations report effective maxUses: 1, including historical records with max_uses > 1', async () => {
+    const team = await seedTeam({ name: 'Contract Team', slug: 'contract-team' })
+    const lead = await seedUser({ email: 'lead-contract@contract.test' })
+    await seedMembership(lead.id, team.id, 'lead')
+    const leadToken = await signAccessToken(lead.id)
+
+    // Creation reports effective maxUses: 1
+    const createRes = await request(app)
+      .post(`/teams/${team.id}/invitations`)
+      .set('Authorization', `Bearer ${leadToken}`)
+      .send({
+        email: 'single-use@contract.test',
+        role: 'member',
+      })
+
+    expect(createRes.status).toBe(201)
+    expect(createRes.body.invitation.maxUses).toBe(1)
+    const invId = createRes.body.invitation.id
+
+    // Simulate historical record with larger stored limit in DB
+    await pool.query('UPDATE invitations SET max_uses = 10 WHERE id = ?', [invId])
+
+    // Listing also reports effective maxUses: 1
+    const listRes = await request(app)
+      .get(`/teams/${team.id}/invitations`)
+      .set('Authorization', `Bearer ${leadToken}`)
+
+    expect(listRes.status).toBe(200)
+    const found = listRes.body.invitations.find((i: { id: number }) => i.id === invId)
+    expect(found).toBeDefined()
+    expect(found.maxUses).toBe(1)
   })
 
   it('GET /teams/:id/members is paginated with nextCursor', async () => {
