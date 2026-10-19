@@ -201,5 +201,20 @@ describe('Dashboard Page (Task 3.7)', () => {
 
     expect(screen.getByText('First Dashboard Item')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Load More Items/i })).not.toBeInTheDocument()
+   })
+
+  it('reads tab query param from URL and renders Approvals view with awaiting_my_approval query', async () => {
+    setupDashboardFetch({ items: [] })
+    renderWithProviders(<Dashboard />, { route: '/dashboard?tab=awaiting_my_approval' })
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/items?view=awaiting_my_approval'),
+        expect.anything(),
+      )
+    })
+
+    expect(screen.getByRole('heading', { level: 1, name: 'Approvals' })).toBeInTheDocument()
+    const approvalTab = screen.getByRole('tab', { name: /Awaiting My Approval/i })
+    expect(approvalTab).toHaveAttribute('aria-selected', 'true')
   })
-})
+ })

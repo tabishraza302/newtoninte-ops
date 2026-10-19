@@ -191,7 +191,7 @@ Surfaces rely on structural 1px borders and tonal layering.
 - **Primary:** Background deep teal (`#0f766e`), text white (`#ffffff`), border `1px solid #0f766e`, padding `0.55rem 1.15rem`, font-weight 600. Hover: `#115e59`. Active: `scale(0.98)`.
 - **Secondary:** Background white (`#ffffff`), text slate-700 (`#334155`), border `1px solid #cbd5e1`, padding `0.55rem 1.15rem`, font-weight 500.
 - **Danger:** Soft red tint background (`#fef2f2`), red text (`#dc2626`), border `1px solid #fecaca`, padding `0.55rem 1.15rem`, font-weight 600. Matches `commonStyles.buttonDanger` from source.
-
+- **Sidebar Action CTA:** Anchored at the top of the workbench navigation section. Solid deep teal (`#0f766e`), white text, 6px radius, subtle resting shadow (`0 1px 2px 0 rgba(0, 0, 0, 0.25)`), `:hover` darkening to `#115e59`, `:active` `#134e4a` with tactile compression (`translateY(1px)`), and accessible focus ring `2px solid #5eead4`. Distinguishes itself from active navigation links through button elevation and an active accent boundary (`#2dd4bf`) when on `/items/new`.
 ### Cards & Containers
 - **Card:** White background (`#ffffff`), border `1px solid #e2e8f0`, border-radius 12px, box-shadow `0 1px 3px 0 rgba(15, 23, 42, 0.03)`.
 - **Card Padded:** Same as Card with `1.5rem` internal padding.

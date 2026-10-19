@@ -361,8 +361,13 @@ export function OutboxJobsTable(): React.ReactElement {
                     <td style={{ padding: '0.875rem 1rem', color: '#64748b', fontFamily: 'ui-monospace, monospace', fontWeight: 600, fontSize: '0.8125rem' }}>
                       #{job.id}
                     </td>
-                    <td style={{ padding: '0.875rem 1rem', fontFamily: 'ui-monospace, monospace', fontSize: '0.8125rem', color: '#0f172a', fontWeight: 500 }}>
-                      {job.type}
+                    <td style={{ padding: '0.875rem 1rem' }}>
+                      <div style={{ fontFamily: 'ui-monospace, monospace', fontSize: '0.8125rem', color: '#0f172a', fontWeight: 600 }}>
+                        {job.type}
+                      </div>
+                      <div style={{ fontFamily: 'ui-monospace, monospace', fontSize: '0.75rem', color: '#64748b' }}>
+                        {job.dedupeKey}
+                      </div>
                     </td>
                     <td style={{ padding: '0.875rem 1rem' }}>
                       <span style={getJobStatusBadge(job.status)}>

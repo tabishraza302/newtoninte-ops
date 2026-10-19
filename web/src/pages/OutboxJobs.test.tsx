@@ -156,12 +156,13 @@ describe('OutboxJobs Page (Task 5.4)', () => {
     expect(failedRow).toHaveTextContent('failed')
     expect(failedRow).toHaveTextContent('3/3')
     expect(failedRow).toHaveTextContent('SMTP connect ECONNREFUSED')
+    expect(failedRow).toHaveTextContent('item:1:assigned:2')
 
     const pendingRow = screen.getByRole('row', { name: /email\.invite/i })
     expect(pendingRow).toHaveTextContent('pending')
     expect(pendingRow).toHaveTextContent('0/5')
+    expect(pendingRow).toHaveTextContent('invite:42')
   })
-
   it('shows the summary counts, calling out failed and the oldest pending age', async () => {
     mockAdminApi()
 

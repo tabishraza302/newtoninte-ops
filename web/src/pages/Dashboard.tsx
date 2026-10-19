@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useItems, useTeams } from '../api/hooks'
 import type { ViewName, WorkItem } from '../api/types'
 import { ItemRow, ItemTableGrid, ItemTableHeader } from '../components/ItemTable'
@@ -28,14 +29,30 @@ export const DASHBOARD_TABS: { key: ViewName; label: string; description: string
 ]
 
 export function Dashboard(): React.ReactElement {
-  const [activeTab, setActiveTab] = useState<ViewName>('assigned_to_me')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const tabParam = searchParams.get('tab') as ViewName | null
+  const activeTab: ViewName =
+    tabParam && DASHBOARD_TABS.some((t) => t.key === tabParam)
+      ? tabParam
+      : 'assigned_to_me'
+
+  const handleTabChange = (key: ViewName) => {
+    const nextParams = new URLSearchParams(searchParams)
+    if (key === 'assigned_to_me') {
+      nextParams.delete('tab')
+    } else {
+      nextParams.set('tab', key)
+    }
+    setSearchParams(nextParams, { replace: true })
+  }
+
   const [selectedTeamId, setSelectedTeamId] = useState<string>('')
   const [cursor, setCursor] = useState<string | undefined>(undefined)
   const [items, setItems] = useState<WorkItem[]>([])
   const [prevFilterKey, setPrevFilterKey] = useState(`${activeTab}|${selectedTeamId}`)
-
   const { data: teamsData } = useTeams()
   const teams = teamsData?.teams ?? []
+  const teamMap = useMemo(() => new Map(teams.map((t) => [t.id, t.name])), [teams])
 
   const currentFilterKey = `${activeTab}|${selectedTeamId}`
   if (currentFilterKey !== prevFilterKey) {
@@ -52,7 +69,6 @@ export function Dashboard(): React.ReactElement {
 
   const { data, isLoading, isFetching, error } = useItems(query)
 
-  const teamMap = useMemo(() => new Map(teams.map((t) => [t.id, t.name])), [teams])
   useEffect(() => {
     if (data?.items) {
       if (!cursor) {
@@ -92,7 +108,7 @@ export function Dashboard(): React.ReactElement {
               letterSpacing: '-0.02em',
             }}
           >
-            Dashboard
+            {activeTab === 'awaiting_my_approval' ? 'Approvals' : 'Dashboard'}
           </h1>
           <p style={{ color: theme.colors.textMuted, fontSize: '0.875rem', margin: 0 }}>
             {activeTabMeta?.description ?? 'Operational triage queues and triage views'}
@@ -148,7 +164,7 @@ export function Dashboard(): React.ReactElement {
               type="button"
               role="tab"
               aria-selected={isActive}
-              onClick={() => setActiveTab(tab.key)}
+              onClick={() => handleTabChange(tab.key)}
               style={{
                 padding: '0.6rem 1rem',
                 fontSize: '0.875rem',
