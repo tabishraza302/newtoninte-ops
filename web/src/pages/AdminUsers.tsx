@@ -50,6 +50,8 @@ export function AdminUsers(): React.ReactElement {
   return <AdminUsersTable />
 }
 
+export type UserFilterTab = 'all' | 'active' | 'disabled' | 'admin'
+
 export function AdminUsersTable(): React.ReactElement {
   const [searchParams, setSearchParams] = useSearchParams()
   const qParam = searchParams.get('q') ?? ''
@@ -89,6 +91,8 @@ export function AdminUsersTable(): React.ReactElement {
   const [formError, setFormError] = useState<string | null>(null)
   const [actionSuccess, setActionSuccess] = useState<string | null>(null)
   const [mutatingUserId, setMutatingUserId] = useState<number | null>(null)
+  const [filterTab, setFilterTab] = useState<UserFilterTab>('all')
+  const [userToDisable, setUserToDisable] = useState<PublicUser | null>(null)
 
   if (effectiveUserSearch !== prevFilterKey) {
     setPrevFilterKey(effectiveUserSearch)
@@ -104,6 +108,26 @@ export function AdminUsersTable(): React.ReactElement {
   const userCreationEnabled = data?.userCreationEnabled ?? false
   const nextCursor = data?.nextCursor ?? null
   const effectiveUsers = !cursor && data?.users ? data.users : users
+  const filteredUsers = effectiveUsers.filter((u) => {
+    if (filterTab === 'active') return u.status === 'active'
+    if (filterTab === 'disabled') return u.status === 'disabled'
+    if (filterTab === 'admin') return u.isAdmin
+    return true
+  })
+  const activeCount = effectiveUsers.filter((u) => u.status === 'active').length
+  const disabledCount = effectiveUsers.filter((u) => u.status === 'disabled').length
+  const adminCount = effectiveUsers.filter((u) => u.isAdmin).length
+
+  useEffect(() => {
+    if (!userToDisable) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setUserToDisable(null)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [userToDisable])
 
   if (effectiveTeamPickerSearch !== prevTeamPickerSearch) {
     setPrevTeamPickerSearch(effectiveTeamPickerSearch)
@@ -293,50 +317,176 @@ export function AdminUsersTable(): React.ReactElement {
   return (
     <div className="admin-users-page" style={{ ...commonStyles.pageContainer, maxWidth: '100%', boxSizing: 'border-box' }}>
       <style>{`
+        .sr-only {
+          position: absolute;
+          width: 1px;
+          height: 1px;
+          padding: 0;
+          margin: -1px;
+          overflow: hidden;
+          clip: rect(0, 0, 0, 0);
+          white-space: nowrap;
+          border-width: 0;
+        }
+        .admin-users-page {
+          width: 100%;
+          max-width: 100%;
+          box-sizing: border-box;
+          padding: 2rem 1.5rem;
+        }
         .admin-users-form-grid {
           display: grid;
           grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
           gap: 1rem;
           margin-bottom: 1.25rem;
         }
-        @media (max-width: 600px) {
+        .users-toolbar {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 0.75rem;
+          align-items: center;
+          justify-content: space-between;
+          padding: 0.75rem 1rem;
+          background-color: #ffffff;
+          border-radius: 8px;
+          border: 1px solid #e2e8f0;
+          box-shadow: 0 1px 3px 0 rgba(15, 23, 42, 0.04);
+          margin-bottom: 1.25rem;
+        }
+        .users-search-wrap {
+          position: relative;
+          flex: 1 1 260px;
+          max-width: 360px;
+          min-width: 200px;
+        }
+        .users-filter-tabs {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          gap: 0.35rem;
+        }
+        .users-table-container {
+          border: 1px solid #e2e8f0;
+          border-radius: 8px;
+          overflow-x: auto;
+          -webkit-overflow-scrolling: touch;
+          background-color: #ffffff;
+          box-shadow: 0 1px 3px 0 rgba(15, 23, 42, 0.04);
+          margin-bottom: 1.5rem;
+        }
+
+        /* Mobile Breakpoint (<=640px) */
+        @media (max-width: 640px) {
+          .admin-users-page {
+            padding: 1rem 0.75rem !important;
+          }
+          .admin-users-header {
+            flex-direction: column !important;
+            align-items: stretch !important;
+            gap: 1rem !important;
+          }
+          .admin-users-header-action {
+            width: 100% !important;
+          }
+          .admin-users-action-btn {
+            width: 100% !important;
+            min-height: 42px !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+          }
           .admin-users-form-grid {
-            grid-template-columns: 1fr;
+            grid-template-columns: 1fr !important;
+          }
+          .team-picker-item {
+            min-height: 44px !important;
+          }
+          .admin-users-form-actions {
+            flex-direction: column-reverse !important;
+          }
+          .admin-users-form-actions button {
+            width: 100% !important;
+            min-height: 42px !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+          }
+          .users-toolbar {
+            flex-direction: column !important;
+            align-items: stretch !important;
+            padding: 0.75rem !important;
+            gap: 0.75rem !important;
+          }
+          .users-search-wrap {
+            flex: 0 0 auto !important;
+            width: 100% !important;
+            max-width: 100% !important;
+          }
+          .users-filter-tabs {
+            width: 100% !important;
+          }
+          .disable-modal-actions {
+            flex-direction: column-reverse !important;
+          }
+          .disable-modal-actions button {
+            width: 100% !important;
+            min-height: 42px !important;
           }
         }
       `}</style>
       {/* Header */}
       <header
+        className="admin-users-header"
         style={{
-          marginBottom: '1.75rem',
+          marginBottom: '1.5rem',
           display: 'flex',
           justifyContent: 'space-between',
-          alignItems: 'center',
-          flexWrap: 'wrap',
+          alignItems: 'flex-start',
           gap: '1rem',
         }}
       >
-        <div>
-          <h1
-            style={{
-              fontSize: '1.75rem',
-              fontWeight: 800,
-              color: '#0f172a',
-              margin: '0 0 0.35rem',
-              letterSpacing: '-0.02em',
-            }}
-          >
-            Users
-          </h1>
+        <div style={{ flex: '1 1 auto' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.35rem', flexWrap: 'wrap' }}>
+            <h1
+              style={{
+                fontSize: '1.75rem',
+                fontWeight: 800,
+                color: '#0f172a',
+                margin: 0,
+                letterSpacing: '-0.02em',
+                lineHeight: 1.2,
+              }}
+            >
+              Users
+            </h1>
+            {effectiveUsers.length > 0 && (
+              <span
+                style={{
+                  ...commonStyles.badgePill,
+                  fontSize: '0.75rem',
+                  fontWeight: 600,
+                  backgroundColor: '#f1f5f9',
+                  color: '#475569',
+                  border: '1px solid #e2e8f0',
+                  lineHeight: 1,
+                }}
+                data-testid="user-count-badge"
+              >
+                {nextCursor ? `${effectiveUsers.length}+` : effectiveUsers.length}{' '}
+                {effectiveUsers.length === 1 ? 'user' : 'users'}
+              </span>
+            )}
+          </div>
           <p style={{ color: '#64748b', fontSize: '0.875rem', margin: 0 }}>
             Manage platform user accounts, authentication statuses, and team memberships
           </p>
         </div>
 
-        <div>
+        <div className="admin-users-header-action" style={{ flexShrink: 0 }}>
           {userCreationEnabled ? (
             <button
               type="button"
+              className="admin-users-action-btn"
               onClick={() => {
                 setShowCreateForm((prev) => !prev)
                 setFormError(null)
@@ -356,6 +506,7 @@ export function AdminUsersTable(): React.ReactElement {
             </button>
           ) : (
             <div
+              className="admin-users-action-btn"
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -588,6 +739,7 @@ export function AdminUsersTable(): React.ReactElement {
                       {effectivePickerTeams.map((team) => (
                         <div
                           key={team.id}
+                          className="team-picker-item"
                           onClick={() => setSelectedTeam(team)}
                           style={{
                             display: 'flex',
@@ -661,7 +813,7 @@ export function AdminUsersTable(): React.ReactElement {
               )}
             </div>
 
-            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+            <div className="admin-users-form-actions" style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
               <button
                 type="button"
                 onClick={() => {
@@ -696,35 +848,147 @@ export function AdminUsersTable(): React.ReactElement {
         </div>
       )}
 
-      {/* Filter / Search Bar */}
+      {/* Unified Operational Toolbar */}
       <div
-        className="filter-bar"
+        className="users-toolbar filter-bar"
         style={{
           display: 'flex',
           flexWrap: 'wrap',
-          gap: '1rem',
-          padding: '1.25rem',
+          gap: '0.75rem',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '0.75rem 1rem',
           backgroundColor: '#ffffff',
           borderRadius: '8px',
           border: '1px solid #e2e8f0',
           boxShadow: '0 1px 3px 0 rgba(15, 23, 42, 0.04)',
-          marginBottom: '1.5rem',
-          alignItems: 'center',
+          marginBottom: '1.25rem',
         }}
       >
-        <div style={{ flex: '1 1 300px' }}>
-          <label htmlFor="search-users-input" style={commonStyles.label}>
+        <div className="users-search-wrap">
+          <label htmlFor="search-users-input" className="sr-only">
             Search Users
           </label>
-          <input
-            id="search-users-input"
-            type="search"
-            aria-label="Search users"
-            placeholder="Search by name or email…"
-            value={searchInput}
-            onChange={(e) => handleSearchChange(e.target.value)}
-            style={commonStyles.input}
-          />
+          <div style={{ position: 'relative', width: '100%', display: 'flex', alignItems: 'center' }}>
+            <svg
+              aria-hidden="true"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="#94a3b8"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              style={{
+                position: 'absolute',
+                left: '0.75rem',
+                top: '50%',
+                transform: 'translateY(-50%)',
+                pointerEvents: 'none',
+              }}
+            >
+              <circle cx="11" cy="11" r="8" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            <input
+              id="search-users-input"
+              type="search"
+              aria-label="Search users"
+              placeholder="Search by name or email…"
+              value={searchInput}
+              onChange={(e) => handleSearchChange(e.target.value)}
+              style={{
+                ...commonStyles.input,
+                padding: '0.45rem 2rem 0.45rem 2.25rem',
+                fontSize: '0.8125rem',
+                width: '100%',
+                boxSizing: 'border-box',
+              }}
+            />
+            {searchInput && (
+              <button
+                type="button"
+                aria-label="Clear search"
+                onClick={() => handleSearchChange('')}
+                style={{
+                  position: 'absolute',
+                  right: '0.5rem',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  background: 'transparent',
+                  border: 'none',
+                  padding: '0.25rem',
+                  cursor: 'pointer',
+                  color: '#94a3b8',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderRadius: '4px',
+                  fontSize: '0.875rem',
+                  lineHeight: 1,
+                }}
+              >
+                ✕
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div
+          className="users-filter-tabs"
+          role="tablist"
+          aria-label="User filters"
+        >
+          {(
+            [
+              { key: 'all', label: 'All', count: effectiveUsers.length },
+              { key: 'active', label: 'Active', count: activeCount },
+              { key: 'disabled', label: 'Disabled', count: disabledCount },
+              { key: 'admin', label: 'Admins', count: adminCount },
+            ] as const
+          ).map((tab) => {
+            const isSelected = filterTab === tab.key
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                role="tab"
+                aria-selected={isSelected}
+                data-testid={`filter-tab-${tab.key}`}
+                onClick={() => setFilterTab(tab.key)}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.35rem',
+                  padding: '0.35rem 0.75rem',
+                  borderRadius: '9999px',
+                  fontSize: '0.8125rem',
+                  fontWeight: isSelected ? 600 : 500,
+                  cursor: 'pointer',
+                  backgroundColor: isSelected ? theme.colors.accentSubtle : '#ffffff',
+                  color: isSelected ? theme.colors.accent : '#475569',
+                  border: `1px solid ${isSelected ? theme.colors.accentBorder : '#e2e8f0'}`,
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                <span>{tab.label}</span>
+                <span
+                  style={{
+                    fontSize: '0.75rem',
+                    padding: '0.1rem 0.4rem',
+                    borderRadius: '9999px',
+                    backgroundColor: isSelected ? 'rgba(15, 118, 110, 0.12)' : '#f1f5f9',
+                    color: isSelected ? theme.colors.accent : '#64748b',
+                    fontWeight: 600,
+                    lineHeight: 1,
+                  }}
+                >
+                  {tab.count}
+                </span>
+              </button>
+            )
+          })}
         </div>
       </div>
 
@@ -784,7 +1048,48 @@ export function AdminUsersTable(): React.ReactElement {
           </div>
         )}
 
-        {effectiveUsers.length > 0 && (
+        {!isLoading && !error && effectiveUsers.length > 0 && filteredUsers.length === 0 && (
+          <div
+            role="status"
+            data-testid="scoped-empty-users-state"
+            style={{
+              padding: '3.5rem 1.5rem',
+              textAlign: 'center',
+              color: '#64748b',
+              background: '#ffffff',
+              borderRadius: '8px',
+              border: '1px dashed #cbd5e1',
+              marginBottom: '1.5rem',
+            }}
+          >
+            <div
+              style={{
+                fontWeight: 600,
+                color: '#0f172a',
+                marginBottom: '0.25rem',
+                fontSize: '1rem',
+              }}
+            >
+              No {filterTab} users match your search
+            </div>
+            <div style={{ fontSize: '0.875rem', marginBottom: '1rem' }}>
+              There are {effectiveUsers.length} total users loaded, but none match the "{filterTab}" filter.
+            </div>
+            <button
+              type="button"
+              onClick={() => setFilterTab('all')}
+              style={{
+                ...commonStyles.buttonSecondary,
+                padding: '0.4rem 0.85rem',
+                fontSize: '0.8125rem',
+              }}
+            >
+              Show all users
+            </button>
+          </div>
+        )}
+
+        {filteredUsers.length > 0 && (
           <div
             className="users-table-container"
             data-testid="users-table"
@@ -798,8 +1103,10 @@ export function AdminUsersTable(): React.ReactElement {
             }}
           >
             <table
+              className="users-table"
               style={{
                 width: '100%',
+                minWidth: '600px',
                 borderCollapse: 'collapse',
                 textAlign: 'left',
                 fontSize: '0.875rem',
@@ -817,27 +1124,38 @@ export function AdminUsersTable(): React.ReactElement {
                     letterSpacing: '0.04em',
                   }}
                 >
-                  <th style={{ padding: '0.75rem 1.25rem' }}>User</th>
-                  <th style={{ padding: '0.75rem 1.25rem' }}>Role</th>
-                  <th style={{ padding: '0.75rem 1.25rem' }}>Status</th>
-                  <th style={{ padding: '0.75rem 1.25rem' }}>Created</th>
-                  <th style={{ padding: '0.75rem 1.25rem', textAlign: 'right' }}>Actions</th>
+                  <th className="col-user" style={{ minWidth: '200px', padding: '0.65rem 0.875rem' }}>
+                    User
+                  </th>
+                  <th className="col-role" style={{ width: '90px', padding: '0.65rem 0.875rem' }}>
+                    Role
+                  </th>
+                  <th className="col-status" style={{ width: '100px', padding: '0.65rem 0.875rem' }}>
+                    Status
+                  </th>
+                  <th className="col-created" style={{ width: '110px', padding: '0.65rem 0.875rem' }}>
+                    Created
+                  </th>
+                  <th className="col-actions" style={{ width: '100px', padding: '0.65rem 0.875rem', textAlign: 'right' }}>
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody>
-                {effectiveUsers.map((u) => {
+                {filteredUsers.map((u) => {
                   const isMutating = mutatingUserId === u.id
                   const isActive = u.status === 'active'
 
                   return (
                     <tr
                       key={u.id}
+                      className="users-table-row"
                       style={{
                         borderBottom: '1px solid #f1f5f9',
                         transition: 'background-color 0.15s ease',
                       }}
                     >
-                      <td style={{ padding: '0.875rem 1.25rem' }}>
+                      <td className="col-user" style={{ padding: '0.75rem 0.875rem' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                           <div
                             style={{
@@ -852,18 +1170,23 @@ export function AdminUsersTable(): React.ReactElement {
                               justifyContent: 'center',
                               fontSize: '0.8125rem',
                               fontWeight: 700,
+                              flexShrink: 0,
                             }}
                           >
                             {(u.displayName || u.email).charAt(0).toUpperCase()}
                           </div>
                           <div>
-                            <div style={{ fontWeight: 600, color: '#0f172a' }}>{u.displayName}</div>
-                            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>{u.email}</div>
+                            <div style={{ fontWeight: 600, color: '#0f172a', whiteSpace: 'nowrap' }}>
+                              {u.displayName}
+                            </div>
+                            <div style={{ fontSize: '0.75rem', color: '#64748b', whiteSpace: 'nowrap' }}>
+                              {u.email}
+                            </div>
                           </div>
                         </div>
                       </td>
 
-                      <td style={{ padding: '0.875rem 1.25rem' }}>
+                      <td className="col-role" style={{ padding: '0.75rem 0.875rem', whiteSpace: 'nowrap' }}>
                         {u.isAdmin ? (
                           <span
                             style={{
@@ -889,28 +1212,47 @@ export function AdminUsersTable(): React.ReactElement {
                         )}
                       </td>
 
-                      <td style={{ padding: '0.875rem 1.25rem' }}>
+                      <td className="col-status" style={{ padding: '0.75rem 0.875rem', whiteSpace: 'nowrap' }}>
                         <span
                           style={{
                             ...commonStyles.badgePill,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.35rem',
                             backgroundColor: isActive ? '#ecfdf5' : '#fef2f2',
                             color: isActive ? '#059669' : '#dc2626',
                             border: `1px solid ${isActive ? '#a7f3d0' : '#fecaca'}`,
                           }}
                         >
+                          <span
+                            aria-hidden="true"
+                            style={{
+                              width: '6px',
+                              height: '6px',
+                              borderRadius: '50%',
+                              backgroundColor: isActive ? '#059669' : '#dc2626',
+                              flexShrink: 0,
+                            }}
+                          />
                           {u.status}
                         </span>
                       </td>
 
-                      <td style={{ padding: '0.875rem 1.25rem', color: '#64748b', whiteSpace: 'nowrap' }}>
+                      <td className="col-created" style={{ padding: '0.75rem 0.875rem', color: '#64748b', whiteSpace: 'nowrap' }}>
                         {u.createdAt ? new Date(u.createdAt).toLocaleDateString() : '—'}
                       </td>
 
-                      <td style={{ padding: '0.875rem 1.25rem', textAlign: 'right' }}>
+                      <td className="col-actions" style={{ padding: '0.75rem 0.875rem', textAlign: 'right', whiteSpace: 'nowrap' }}>
                         <button
                           type="button"
                           disabled={isMutating}
-                          onClick={() => void handleToggleStatus(u)}
+                          onClick={() => {
+                            if (isActive) {
+                              setUserToDisable(u)
+                            } else {
+                              void handleToggleStatus(u)
+                            }
+                          }}
                           aria-label={
                             isActive
                               ? `Disable user ${u.displayName}`
@@ -957,6 +1299,83 @@ export function AdminUsersTable(): React.ReactElement {
             >
               {isFetching ? 'Loading more users…' : 'Load more users'}
             </button>
+          </div>
+        )}
+
+        {/* Account Disablement Confirmation Dialog */}
+        {userToDisable && (
+          <div
+            role="presentation"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setUserToDisable(null)
+            }}
+            style={{
+              position: 'fixed',
+              inset: 0,
+              backgroundColor: 'rgba(15, 23, 42, 0.5)',
+              zIndex: 1000,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '1rem',
+            }}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="disable-user-title"
+              style={{
+                maxWidth: '440px',
+                width: '100%',
+                backgroundColor: '#ffffff',
+                borderRadius: '12px',
+                padding: '1.5rem',
+                boxShadow: theme.shadows.lg,
+              }}
+            >
+              <h2
+                id="disable-user-title"
+                style={{
+                  fontSize: '1.125rem',
+                  fontWeight: 700,
+                  margin: '0 0 0.5rem',
+                  color: '#0f172a',
+                }}
+              >
+                Disable User Account
+              </h2>
+              <p style={{ fontSize: '0.875rem', color: '#475569', margin: '0 0 1.25rem', lineHeight: 1.5 }}>
+                Are you sure you want to disable <strong>{userToDisable.displayName}</strong> ({userToDisable.email})? They will immediately lose access to Newtonite Operations.
+              </p>
+              <div className="disable-modal-actions" style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  onClick={() => setUserToDisable(null)}
+                  style={{
+                    ...commonStyles.buttonSecondary,
+                    padding: '0.5rem 1rem',
+                    fontSize: '0.875rem',
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = userToDisable
+                    setUserToDisable(null)
+                    void handleToggleStatus(target)
+                  }}
+                  style={{
+                    ...commonStyles.buttonDanger,
+                    padding: '0.5rem 1rem',
+                    fontSize: '0.875rem',
+                  }}
+                >
+                  Confirm Disable
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </section>

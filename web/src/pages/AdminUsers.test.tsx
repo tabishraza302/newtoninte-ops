@@ -272,6 +272,9 @@ describe('AdminUsers Page', () => {
     const disableBtn = screen.getByRole('button', { name: /Disable user Alice Engineer/i })
     fireEvent.click(disableBtn)
 
+    expect(screen.getByRole('dialog', { name: /Disable User Account/i })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /^Confirm Disable$/i }))
+
     // After mutation settles: status changes to disabled, button changes to enable, success feedback appears
     await waitFor(() => {
       expect(screen.getByText(/User alice@company.test is now disabled/i)).toBeInTheDocument()
@@ -945,5 +948,161 @@ describe('AdminUsers Page', () => {
     await waitFor(() => {
       expect(searchInput.value).toBe('')
     })
+  })
+
+  it('canceling disable confirmation leaves user active without calling PATCH', async () => {
+    mockUsersApi([user1, user2])
+    await renderAdminUsers()
+
+    await waitFor(() => {
+      expect(screen.getByText('Alice Engineer')).toBeInTheDocument()
+    })
+
+    const disableBtn = screen.getByRole('button', { name: /Disable user Alice Engineer/i })
+    fireEvent.click(disableBtn)
+
+    // Assert dialog appears
+    const dialog = screen.getByRole('dialog', { name: /Disable User Account/i })
+    expect(dialog).toBeInTheDocument()
+    expect(within(dialog).getByText(/Are you sure you want to disable/i)).toBeInTheDocument()
+
+    // Cancel disablement
+    const cancelBtn = within(dialog).getByRole('button', { name: /Cancel/i })
+    fireEvent.click(cancelBtn)
+
+    // Dialog closes and user remains active
+    expect(screen.queryByRole('dialog', { name: /Disable User Account/i })).not.toBeInTheDocument()
+    expect(screen.getByText('active')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Disable user Alice Engineer/i })).toBeInTheDocument()
+
+    // No PATCH request was made
+    const patchCalls = fetchMock.mock.calls.filter((c) => c[1]?.method === 'PATCH')
+    expect(patchCalls).toHaveLength(0)
+  })
+
+  it('filters users by quick status and role tabs', async () => {
+    mockUsersApi([user1, user2, user3])
+    await renderAdminUsers()
+
+    await waitFor(() => {
+      expect(screen.getByText('Alice Engineer')).toBeInTheDocument()
+      expect(screen.getByText('Bob Manager')).toBeInTheDocument()
+      expect(screen.getByText('Charlie Designer')).toBeInTheDocument()
+    })
+
+    // Filter by Disabled: only Bob Manager (disabled)
+    const disabledTab = screen.getByTestId('filter-tab-disabled')
+    fireEvent.click(disabledTab)
+
+    expect(screen.getByText('Bob Manager')).toBeInTheDocument()
+    expect(screen.queryByText('Alice Engineer')).not.toBeInTheDocument()
+    expect(screen.queryByText('Charlie Designer')).not.toBeInTheDocument()
+
+    // Filter by Admins: only Bob Manager (isAdmin)
+    const adminTab = screen.getByTestId('filter-tab-admin')
+    fireEvent.click(adminTab)
+
+    expect(screen.getByText('Bob Manager')).toBeInTheDocument()
+    expect(screen.queryByText('Alice Engineer')).not.toBeInTheDocument()
+    expect(screen.queryByText('Charlie Designer')).not.toBeInTheDocument()
+
+    // Filter by Active: Alice Engineer and Charlie Designer
+    const activeTab = screen.getByTestId('filter-tab-active')
+    fireEvent.click(activeTab)
+
+    expect(screen.getByText('Alice Engineer')).toBeInTheDocument()
+    expect(screen.getByText('Charlie Designer')).toBeInTheDocument()
+    expect(screen.queryByText('Bob Manager')).not.toBeInTheDocument()
+
+    // Reset to All: all users visible
+    const allTab = screen.getByTestId('filter-tab-all')
+    fireEvent.click(allTab)
+
+    expect(screen.getByText('Alice Engineer')).toBeInTheDocument()
+    expect(screen.getByText('Bob Manager')).toBeInTheDocument()
+    expect(screen.getByText('Charlie Designer')).toBeInTheDocument()
+  })
+
+  it('clearing search input with clear button resets query', async () => {
+    mockUsersApi([user1, user2])
+    await renderAdminUsers()
+
+    await waitFor(() => {
+      expect(screen.getByText('Alice Engineer')).toBeInTheDocument()
+    })
+
+    const searchInput = screen.getByLabelText(/search users/i)
+    fireEvent.change(searchInput, { target: { value: 'alice' } })
+    expect(searchInput).toHaveValue('alice')
+
+    // Clear button is rendered
+    const clearBtn = screen.getByRole('button', { name: /Clear search/i })
+    expect(clearBtn).toBeInTheDocument()
+
+    // Click clear button
+    fireEvent.click(clearBtn)
+
+    expect(searchInput).toHaveValue('')
+    expect(screen.queryByRole('button', { name: /Clear search/i })).not.toBeInTheDocument()
+  })
+
+  it('renders responsive count badge and table without clipping actions', async () => {
+    mockUsersApi([user1, user2])
+    await renderAdminUsers()
+
+    await waitFor(() => {
+      expect(screen.getByText('Alice Engineer')).toBeInTheDocument()
+    })
+
+    // User count badge renders count matching loaded users
+    const badge = screen.getByTestId('user-count-badge')
+    expect(badge).toBeInTheDocument()
+    expect(badge).toHaveTextContent('2 users')
+
+    // Action buttons are present for each user row
+    expect(screen.getByRole('button', { name: /Disable user Alice Engineer/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Enable user Bob Manager/i })).toBeInTheDocument()
+  })
+
+  it('displays scoped empty state when a filter tab has no matching users and resets via show all', async () => {
+    mockUsersApi([user1])
+    await renderAdminUsers()
+
+    await waitFor(() => {
+      expect(screen.getByText('Alice Engineer')).toBeInTheDocument()
+    })
+
+    // Filter by disabled -> 0 matching users
+    fireEvent.click(screen.getByTestId('filter-tab-disabled'))
+
+    expect(screen.getByTestId('scoped-empty-users-state')).toBeInTheDocument()
+    expect(screen.getByText(/No disabled users match your search/i)).toBeInTheDocument()
+    expect(screen.queryByText('Alice Engineer')).not.toBeInTheDocument()
+
+    // Click "Show all users" button
+    fireEvent.click(screen.getByRole('button', { name: /Show all users/i }))
+
+    expect(screen.queryByTestId('scoped-empty-users-state')).not.toBeInTheDocument()
+    expect(screen.getByText('Alice Engineer')).toBeInTheDocument()
+  })
+
+  it('closes disable confirmation dialog when Escape key is pressed', async () => {
+    mockUsersApi([user1, user2])
+    await renderAdminUsers()
+
+    await waitFor(() => {
+      expect(screen.getByText('Alice Engineer')).toBeInTheDocument()
+    })
+
+    const disableBtn = screen.getByRole('button', { name: /Disable user Alice Engineer/i })
+    fireEvent.click(disableBtn)
+
+    expect(screen.getByRole('dialog', { name: /Disable User Account/i })).toBeInTheDocument()
+
+    // Press Escape key
+    fireEvent.keyDown(window, { key: 'Escape' })
+
+    expect(screen.queryByRole('dialog', { name: /Disable User Account/i })).not.toBeInTheDocument()
+    expect(screen.getByText('active')).toBeInTheDocument()
   })
 })
