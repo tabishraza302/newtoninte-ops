@@ -4,6 +4,8 @@ A team-scoped operations workspace for creating, assigning, discussing, and reso
 
 Built with Bun, TypeScript, Express, Drizzle/MySQL, React, TanStack Query, and Vite.
 
+**Live preview:** <http://140.238.229.160/> — HTTP only, no domain. Use the demo accounts below; do not enter real or sensitive data.
+
 ## Run the local demo
 
 Prerequisites: Docker with Docker Compose. The container build installs dependencies from `bun.lock`; a host Bun installation is not required for this path.
