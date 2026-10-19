@@ -94,6 +94,36 @@ export function AdminUsersTable(): React.ReactElement {
   const [filterTab, setFilterTab] = useState<UserFilterTab>('all')
   const [userToDisable, setUserToDisable] = useState<PublicUser | null>(null)
 
+  const createTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const createModalRef = useRef<HTMLDivElement | null>(null)
+  const emailInputRef = useRef<HTMLInputElement | null>(null)
+  const wasCreateOpenRef = useRef(false)
+
+  const handleCloseCreateModal = (): void => {
+    setShowCreateForm(false)
+    setFormError(null)
+    setSelectedTeam(null)
+    setSelectedRole('member')
+    setTeamPickerSearch('')
+    setTeamPickerCursor(undefined)
+    setPrevTeamPickerSearch('')
+    if (authoritativePage1Ref.current.length > 0) {
+      setTeamPickerTeams(authoritativePage1Ref.current)
+    }
+  }
+
+  const handleOpenCreateModal = (): void => {
+    setShowCreateForm(true)
+    setFormError(null)
+    setSelectedTeam(null)
+    setSelectedRole('member')
+    setTeamPickerSearch('')
+    setTeamPickerCursor(undefined)
+    setPrevTeamPickerSearch('')
+    if (authoritativePage1Ref.current.length > 0) {
+      setTeamPickerTeams(authoritativePage1Ref.current)
+    }
+  }
   if (effectiveUserSearch !== prevFilterKey) {
     setPrevFilterKey(effectiveUserSearch)
     setCursor(undefined)
@@ -193,6 +223,64 @@ export function AdminUsersTable(): React.ReactElement {
     }
   }, [data, cursor])
 
+  useEffect(() => {
+    if (!showCreateForm) {
+      if (wasCreateOpenRef.current) {
+        createTriggerRef.current?.focus()
+      }
+      wasCreateOpenRef.current = false
+      return
+    }
+
+    wasCreateOpenRef.current = true
+    const originalOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+
+    const timer = setTimeout(() => {
+      emailInputRef.current?.focus()
+    }, 0)
+
+    const handleKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        if (!createUserMutation.isPending) {
+          e.preventDefault()
+          handleCloseCreateModal()
+        }
+        return
+      }
+
+      if (e.key === 'Tab' && createModalRef.current) {
+        const focusables = Array.from(
+          createModalRef.current.querySelectorAll<HTMLElement>(
+            'input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), [tabindex]:not([tabindex="-1"])'
+          )
+        )
+        if (focusables.length === 0) return
+        const first = focusables[0]
+        const last = focusables[focusables.length - 1]
+        if (!first || !last) return
+        if (e.shiftKey) {
+          if (document.activeElement === first || !createModalRef.current.contains(document.activeElement)) {
+            e.preventDefault()
+            last.focus()
+          }
+        } else {
+          if (document.activeElement === last || !createModalRef.current.contains(document.activeElement)) {
+            e.preventDefault()
+            first.focus()
+          }
+        }
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      clearTimeout(timer)
+      document.body.style.overflow = originalOverflow
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [showCreateForm, createUserMutation.isPending])
+
 
   const handleSearchChange = (val: string): void => {
     submittedUserQueriesRef.current.add(val)
@@ -271,15 +359,7 @@ export function AdminUsersTable(): React.ReactElement {
       setEmail('')
       setDisplayName('')
       setPassword('')
-      setSelectedTeam(null)
-      setSelectedRole('member')
-      setTeamPickerSearch('')
-      setTeamPickerCursor(undefined)
-      setPrevTeamPickerSearch('')
-      if (authoritativePage1Ref.current.length > 0) {
-        setTeamPickerTeams(authoritativePage1Ref.current)
-      }
-      setShowCreateForm(false)
+      handleCloseCreateModal()
       // Refetch from beginning to see the newly created user and eliminate stale accumulated rows
       setCursor(undefined)
       setUsers([])
@@ -486,23 +566,13 @@ export function AdminUsersTable(): React.ReactElement {
           {userCreationEnabled ? (
             <button
               type="button"
+              ref={createTriggerRef}
               className="admin-users-action-btn"
-              onClick={() => {
-                setShowCreateForm((prev) => !prev)
-                setFormError(null)
-                setSelectedTeam(null)
-                setSelectedRole('member')
-                setTeamPickerSearch('')
-                setTeamPickerCursor(undefined)
-                setPrevTeamPickerSearch('')
-                if (authoritativePage1Ref.current.length > 0) {
-                  setTeamPickerTeams(authoritativePage1Ref.current)
-                }
-              }}
+              onClick={handleOpenCreateModal}
               style={commonStyles.buttonPrimary}
             >
-              <span style={{ fontSize: '1rem', lineHeight: 1 }}>{showCreateForm ? '−' : '+'}</span>
-              <span>{showCreateForm ? 'Cancel' : 'Create User'}</span>
+              <span style={{ fontSize: '1rem', lineHeight: 1 }}>+</span>
+              <span>Create User</span>
             </button>
           ) : (
             <div
@@ -568,283 +638,347 @@ export function AdminUsersTable(): React.ReactElement {
       )}
 
       {/* Create User Form Section */}
+      {/* Create User Modal Dialog */}
       {showCreateForm && userCreationEnabled && (
         <div
+          role="presentation"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !createUserMutation.isPending) {
+              handleCloseCreateModal()
+            }
+          }}
           style={{
-            ...commonStyles.cardPadded,
-            marginBottom: '1.75rem',
-            backgroundColor: '#ffffff',
-            border: '1px solid #cbd5e1',
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(15, 23, 42, 0.5)',
+            zIndex: 1000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '1rem',
           }}
         >
-          <div style={{ marginBottom: '1.25rem' }}>
-            <h2
-              style={{
-                fontSize: '1.125rem',
-                fontWeight: 700,
-                color: '#0f172a',
-                margin: '0 0 0.25rem',
-                letterSpacing: '-0.01em',
-              }}
-            >
-              Provision New User
-            </h2>
-            <p style={{ fontSize: '0.8125rem', color: '#64748b', margin: 0 }}>
-              Create an active platform user and optionally assign them to a team.
-            </p>
-          </div>
-
-          {formError && (
-            <div role="alert" style={{ ...commonStyles.alertError, marginBottom: '1.25rem' }}>
-              {formError}
-            </div>
-          )}
-
-          <form onSubmit={(e) => void handleCreateUser(e)}>
-            <div className="admin-users-form-grid">
-              <div>
-                <label htmlFor="create-user-email" style={commonStyles.label}>
-                  Email Address *
-                </label>
-                <input
-                  id="create-user-email"
-                  type="email"
-                  required
-                  placeholder="alex@company.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  style={commonStyles.input}
-                  autoComplete="off"
-                />
-              </div>
-
-              <div>
-                <label htmlFor="create-user-name" style={commonStyles.label}>
-                  Display Name *
-                </label>
-                <input
-                  id="create-user-name"
-                  type="text"
-                  required
-                  maxLength={120}
-                  placeholder="Alex Rivera"
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
-                  style={commonStyles.input}
-                />
-              </div>
-
-              <div>
-                <label htmlFor="create-user-password" style={commonStyles.label}>
-                  Initial Password (min 8 chars) *
-                </label>
-                <input
-                  id="create-user-password"
-                  type="password"
-                  required
-                  minLength={8}
-                  maxLength={72}
-                  placeholder="••••••••"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  style={commonStyles.input}
-                  autoComplete="new-password"
-                />
-              </div>
-            </div>
-
+          <div
+            ref={createModalRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="create-user-modal-title"
+            aria-describedby="create-user-modal-description"
+            tabIndex={-1}
+            style={{
+              maxWidth: '640px',
+              width: '100%',
+              maxHeight: 'calc(100vh - 2rem)',
+              overflowY: 'auto',
+              backgroundColor: '#ffffff',
+              borderRadius: '12px',
+              boxShadow: theme.shadows.lg,
+              padding: '1.75rem',
+              boxSizing: 'border-box',
+            }}
+          >
             <div
               style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                display: 'flex',
+                alignItems: 'flex-start',
+                justifyContent: 'space-between',
+                marginBottom: '1.25rem',
                 gap: '1rem',
-                marginBottom: '1.5rem',
-                paddingTop: '0.75rem',
-                borderTop: '1px solid #f1f5f9',
               }}
             >
-              <div style={{ gridColumn: '1 / -1' }}>
-                <label htmlFor="team-picker-search" style={commonStyles.label}>
-                  Initial Team (Optional)
-                </label>
-                {selectedTeam ? (
-                  <div
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      padding: '0.65rem 0.85rem',
-                      backgroundColor: '#f1f5f9',
-                      border: '1px solid #cbd5e1',
-                      borderRadius: '6px',
-                    }}
-                  >
-                    <div>
-                      <span style={{ fontSize: '0.8125rem', color: '#64748b' }}>Selected: </span>
-                      <span style={{ fontWeight: 600, fontSize: '0.875rem', color: '#0f172a' }}>
-                        {selectedTeam.name}
-                      </span>{' '}
-                      <span style={{ fontSize: '0.75rem', color: '#64748b' }}>({selectedTeam.slug})</span>
-                    </div>
-                    <button
-                      type="button"
-                      aria-label="Clear selected team"
-                      onClick={() => setSelectedTeam(null)}
-                      style={{
-                        ...commonStyles.buttonSecondary,
-                        padding: '0.25rem 0.6rem',
-                        fontSize: '0.75rem',
-                      }}
-                    >
-                      Clear team
-                    </button>
-                  </div>
-                ) : (
-                  <div>
-                    <input
-                      id="team-picker-search"
-                      type="search"
-                      aria-label="Search initial team"
-                      placeholder="Search teams by name or slug…"
-                      value={teamPickerSearch}
-                      onChange={(e) => setTeamPickerSearch(e.target.value)}
-                      style={{ ...commonStyles.input, marginBottom: '0.5rem' }}
-                    />
+              <div>
+                <h2
+                  id="create-user-modal-title"
+                  style={{
+                    fontSize: '1.125rem',
+                    fontWeight: 700,
+                    color: '#0f172a',
+                    margin: '0 0 0.25rem',
+                    letterSpacing: '-0.01em',
+                  }}
+                >
+                  Provision New User
+                </h2>
+                <p id="create-user-modal-description" style={{ fontSize: '0.8125rem', color: '#64748b', margin: 0 }}>
+                  Create an active platform user and optionally assign them to a team.
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-label="Close dialog"
+                onClick={handleCloseCreateModal}
+                disabled={createUserMutation.isPending}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: createUserMutation.isPending ? 'not-allowed' : 'pointer',
+                  color: '#64748b',
+                  padding: '0.25rem',
+                  borderRadius: '4px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            </div>
+
+            {formError && (
+              <div role="alert" style={{ ...commonStyles.alertError, marginBottom: '1.25rem' }}>
+                {formError}
+              </div>
+            )}
+
+            <form onSubmit={(e) => void handleCreateUser(e)}>
+              <div className="admin-users-form-grid">
+                <div>
+                  <label htmlFor="create-user-email" style={commonStyles.label}>
+                    Email Address *
+                  </label>
+                  <input
+                    ref={emailInputRef}
+                    id="create-user-email"
+                    type="email"
+                    required
+                    placeholder="alex@company.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    style={commonStyles.input}
+                    autoComplete="off"
+                    disabled={createUserMutation.isPending}
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="create-user-name" style={commonStyles.label}>
+                    Display Name *
+                  </label>
+                  <input
+                    id="create-user-name"
+                    type="text"
+                    required
+                    maxLength={120}
+                    placeholder="Alex Rivera"
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                    style={commonStyles.input}
+                    disabled={createUserMutation.isPending}
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="create-user-password" style={commonStyles.label}>
+                    Initial Password (min 8 chars) *
+                  </label>
+                  <input
+                    id="create-user-password"
+                    type="password"
+                    required
+                    minLength={8}
+                    maxLength={72}
+                    placeholder="••••••••"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    style={commonStyles.input}
+                    autoComplete="new-password"
+                    disabled={createUserMutation.isPending}
+                  />
+                </div>
+              </div>
+
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                  gap: '1rem',
+                  marginBottom: '1.5rem',
+                  paddingTop: '0.75rem',
+                  borderTop: '1px solid #f1f5f9',
+                }}
+              >
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <label htmlFor="team-picker-search" style={commonStyles.label}>
+                    Initial Team (Optional)
+                  </label>
+                  {selectedTeam ? (
                     <div
-                      role="region"
-                      aria-label="Initial team search results"
                       style={{
-                        border: '1px solid #e2e8f0',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '0.65rem 0.85rem',
+                        backgroundColor: '#f1f5f9',
+                        border: '1px solid #cbd5e1',
                         borderRadius: '6px',
-                        maxHeight: '180px',
-                        overflowY: 'auto',
-                        backgroundColor: '#ffffff',
                       }}
                     >
-                      {teamPickerLoading && effectivePickerTeams.length === 0 && (
-                        <div style={{ padding: '1rem', textAlign: 'center', color: '#64748b', fontSize: '0.8125rem' }}>
-                          Searching teams…
-                        </div>
-                      )}
-                      {teamPickerError && (
-                        <div style={{ padding: '0.75rem', color: '#dc2626', fontSize: '0.8125rem' }}>
-                          Failed to search teams.
-                        </div>
-                      )}
-                      {!teamPickerLoading && !teamPickerError && effectivePickerTeams.length === 0 && (
-                        <div style={{ padding: '1rem', textAlign: 'center', color: '#64748b', fontSize: '0.8125rem' }}>
-                          No teams found.
-                        </div>
-                      )}
-                      {effectivePickerTeams.map((team) => (
-                        <div
-                          key={team.id}
-                          className="team-picker-item"
-                          onClick={() => setSelectedTeam(team)}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            padding: '0.55rem 0.85rem',
-                            borderBottom: '1px solid #f1f5f9',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          <div>
-                            <span style={{ fontWeight: 600, fontSize: '0.8125rem', color: '#0f172a' }}>{team.name}</span>{' '}
-                            <span style={{ fontSize: '0.75rem', color: '#64748b' }}>({team.slug})</span>
-                          </div>
-                          <button
-                            type="button"
-                            aria-label={`Select team ${team.name}`}
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setSelectedTeam(team)
-                            }}
-                            style={{
-                              ...commonStyles.buttonSecondary,
-                              padding: '0.2rem 0.55rem',
-                              fontSize: '0.75rem',
-                            }}
-                          >
-                            Select
-                          </button>
-                        </div>
-                      ))}
-                      {teamPickerData?.nextCursor && (
-                        <div style={{ padding: '0.4rem', textAlign: 'center', backgroundColor: '#f8fafc' }}>
-                          <button
-                            type="button"
-                            onClick={() => setTeamPickerCursor(teamPickerData.nextCursor ?? undefined)}
-                            disabled={teamPickerFetching}
-                            style={{
-                              ...commonStyles.buttonSecondary,
-                              padding: '0.25rem 0.75rem',
-                              fontSize: '0.75rem',
-                              width: '100%',
-                            }}
-                          >
-                            {teamPickerFetching ? 'Loading teams…' : 'Load more teams'}
-                          </button>
-                        </div>
-                      )}
+                      <div>
+                        <span style={{ fontSize: '0.8125rem', color: '#64748b' }}>Selected: </span>
+                        <span style={{ fontWeight: 600, fontSize: '0.875rem', color: '#0f172a' }}>
+                          {selectedTeam.name}
+                        </span>{' '}
+                        <span style={{ fontSize: '0.75rem', color: '#64748b' }}>({selectedTeam.slug})</span>
+                      </div>
+                      <button
+                        type="button"
+                        aria-label="Clear selected team"
+                        onClick={() => setSelectedTeam(null)}
+                        disabled={createUserMutation.isPending}
+                        style={{
+                          ...commonStyles.buttonSecondary,
+                          padding: '0.25rem 0.6rem',
+                          fontSize: '0.75rem',
+                        }}
+                      >
+                        Clear team
+                      </button>
                     </div>
+                  ) : (
+                    <div>
+                      <input
+                        id="team-picker-search"
+                        type="search"
+                        aria-label="Search initial team"
+                        placeholder="Search teams by name or slug…"
+                        value={teamPickerSearch}
+                        onChange={(e) => setTeamPickerSearch(e.target.value)}
+                        style={{ ...commonStyles.input, marginBottom: '0.5rem' }}
+                        disabled={createUserMutation.isPending}
+                      />
+                      <div
+                        role="region"
+                        aria-label="Initial team search results"
+                        style={{
+                          border: '1px solid #e2e8f0',
+                          borderRadius: '6px',
+                          maxHeight: '180px',
+                          overflowY: 'auto',
+                          backgroundColor: '#ffffff',
+                        }}
+                      >
+                        {teamPickerLoading && effectivePickerTeams.length === 0 && (
+                          <div style={{ padding: '1rem', textAlign: 'center', color: '#64748b', fontSize: '0.8125rem' }}>
+                            Searching teams…
+                          </div>
+                        )}
+                        {teamPickerError && (
+                          <div style={{ padding: '0.75rem', color: '#dc2626', fontSize: '0.8125rem' }}>
+                            Failed to search teams.
+                          </div>
+                        )}
+                        {!teamPickerLoading && !teamPickerError && effectivePickerTeams.length === 0 && (
+                          <div style={{ padding: '1rem', textAlign: 'center', color: '#64748b', fontSize: '0.8125rem' }}>
+                            No teams found.
+                          </div>
+                        )}
+                        {effectivePickerTeams.map((team) => (
+                          <div
+                            key={team.id}
+                            className="team-picker-item"
+                            onClick={() => {
+                              if (!createUserMutation.isPending) setSelectedTeam(team)
+                            }}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              padding: '0.55rem 0.85rem',
+                              borderBottom: '1px solid #f1f5f9',
+                              cursor: createUserMutation.isPending ? 'not-allowed' : 'pointer',
+                            }}
+                          >
+                            <div>
+                              <span style={{ fontWeight: 600, fontSize: '0.8125rem', color: '#0f172a' }}>{team.name}</span>{' '}
+                              <span style={{ fontSize: '0.75rem', color: '#64748b' }}>({team.slug})</span>
+                            </div>
+                            <button
+                              type="button"
+                              aria-label={`Select team ${team.name}`}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                if (!createUserMutation.isPending) setSelectedTeam(team)
+                              }}
+                              disabled={createUserMutation.isPending}
+                              style={{
+                                ...commonStyles.buttonSecondary,
+                                padding: '0.2rem 0.55rem',
+                                fontSize: '0.75rem',
+                              }}
+                            >
+                              Select
+                            </button>
+                          </div>
+                        ))}
+                        {teamPickerData?.nextCursor && (
+                          <div style={{ padding: '0.4rem', textAlign: 'center', backgroundColor: '#f8fafc' }}>
+                            <button
+                              type="button"
+                              onClick={() => setTeamPickerCursor(teamPickerData.nextCursor ?? undefined)}
+                              disabled={teamPickerFetching || createUserMutation.isPending}
+                              style={{
+                                ...commonStyles.buttonSecondary,
+                                padding: '0.25rem 0.75rem',
+                                fontSize: '0.75rem',
+                                width: '100%',
+                              }}
+                            >
+                              {teamPickerFetching ? 'Loading teams…' : 'Load more teams'}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {selectedTeam && (
+                  <div>
+                    <label htmlFor="create-user-role" style={commonStyles.label}>
+                      Team Role *
+                    </label>
+                    <select
+                      id="create-user-role"
+                      aria-label="Team Role"
+                      value={selectedRole}
+                      onChange={(e) => setSelectedRole(e.target.value as Role)}
+                      disabled={createUserMutation.isPending}
+                      style={commonStyles.select}
+                    >
+                      <option value="viewer">Viewer</option>
+                      <option value="member">Member</option>
+                      <option value="lead">Lead</option>
+                    </select>
                   </div>
                 )}
               </div>
 
-              {selectedTeam && (
-                <div>
-                  <label htmlFor="create-user-role" style={commonStyles.label}>
-                    Team Role *
-                  </label>
-                  <select
-                    id="create-user-role"
-                    aria-label="Team Role"
-                    value={selectedRole}
-                    onChange={(e) => setSelectedRole(e.target.value as Role)}
-                    style={commonStyles.select}
-                  >
-                    <option value="viewer">Viewer</option>
-                    <option value="member">Member</option>
-                    <option value="lead">Lead</option>
-                  </select>
-                </div>
-              )}
-            </div>
-
-            <div className="admin-users-form-actions" style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowCreateForm(false)
-                  setFormError(null)
-                  setSelectedTeam(null)
-                  setSelectedRole('member')
-                  setTeamPickerSearch('')
-                  setTeamPickerCursor(undefined)
-                  setPrevTeamPickerSearch('')
-                  if (authoritativePage1Ref.current.length > 0) {
-                    setTeamPickerTeams(authoritativePage1Ref.current)
-                  }
-                }}
-                style={commonStyles.buttonSecondary}
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={createUserMutation.isPending}
-                style={{
-                  ...commonStyles.buttonPrimary,
-                  opacity: createUserMutation.isPending ? 0.7 : 1,
-                  cursor: createUserMutation.isPending ? 'not-allowed' : 'pointer',
-                }}
-              >
-                {createUserMutation.isPending ? 'Creating…' : 'Create User'}
-              </button>
-            </div>
-          </form>
+              <div className="admin-users-form-actions" style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  onClick={handleCloseCreateModal}
+                  disabled={createUserMutation.isPending}
+                  style={commonStyles.buttonSecondary}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={createUserMutation.isPending}
+                  style={{
+                    ...commonStyles.buttonPrimary,
+                    opacity: createUserMutation.isPending ? 0.7 : 1,
+                    cursor: createUserMutation.isPending ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {createUserMutation.isPending ? 'Creating…' : 'Create User'}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
 

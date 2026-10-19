@@ -1105,4 +1105,104 @@ describe('AdminUsers Page', () => {
     expect(screen.queryByRole('dialog', { name: /Disable User Account/i })).not.toBeInTheDocument()
     expect(screen.getByText('active')).toBeInTheDocument()
   })
+
+  it('opens create user modal dialog with role="dialog" and aria-modal="true"', async () => {
+    mockUsersApi([user1])
+    await renderAdminUsers()
+
+    await waitFor(() => {
+      expect(screen.getByText('Alice Engineer')).toBeInTheDocument()
+    })
+
+    const triggerBtn = screen.getByRole('button', { name: /Create User/i })
+    fireEvent.click(triggerBtn)
+
+    const dialog = screen.getByRole('dialog', { name: /Provision New User/i })
+    expect(dialog).toBeInTheDocument()
+    expect(dialog).toHaveAttribute('aria-modal', 'true')
+    expect(dialog).toHaveAttribute('aria-describedby', 'create-user-modal-description')
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Email Address/i)).toHaveFocus()
+    })
+  })
+
+  it('closes create user modal on Escape key press', async () => {
+    mockUsersApi([user1])
+    await renderAdminUsers()
+
+    await waitFor(() => {
+      expect(screen.getByText('Alice Engineer')).toBeInTheDocument()
+    })
+
+    const triggerBtn = screen.getByRole('button', { name: /Create User/i })
+    fireEvent.click(triggerBtn)
+
+    expect(screen.getByRole('dialog', { name: /Provision New User/i })).toBeInTheDocument()
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+
+    expect(screen.queryByRole('dialog', { name: /Provision New User/i })).not.toBeInTheDocument()
+    expect(triggerBtn).toHaveFocus()
+  })
+
+  it('closes create user modal when clicking close X button', async () => {
+    mockUsersApi([user1])
+    await renderAdminUsers()
+
+    await waitFor(() => {
+      expect(screen.getByText('Alice Engineer')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /Create User/i }))
+
+    const dialog = screen.getByRole('dialog', { name: /Provision New User/i })
+    const closeBtn = within(dialog).getByRole('button', { name: /Close dialog/i })
+    fireEvent.click(closeBtn)
+
+    expect(screen.queryByRole('dialog', { name: /Provision New User/i })).not.toBeInTheDocument()
+  })
+
+  it('closes create user modal when clicking backdrop overlay', async () => {
+    mockUsersApi([user1])
+    await renderAdminUsers()
+
+    await waitFor(() => {
+      expect(screen.getByText('Alice Engineer')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /Create User/i }))
+
+    const backdrop = screen.getByRole('presentation')
+    fireEvent.click(backdrop)
+
+    expect(screen.queryByRole('dialog', { name: /Provision New User/i })).not.toBeInTheDocument()
+  })
+
+  it('traps Tab focus inside the create user modal dialog', async () => {
+    mockUsersApi([user1])
+    await renderAdminUsers()
+
+    await waitFor(() => {
+      expect(screen.getByText('Alice Engineer')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /Create User/i }))
+
+    const dialog = screen.getByRole('dialog', { name: /Provision New User/i })
+    const closeBtn = within(dialog).getByRole('button', { name: /Close dialog/i })
+    const submitBtn = within(dialog).getByRole('button', { name: /^Create User$/i })
+
+    // Tab forward from last focusable wraps to first focusable (close button)
+    submitBtn.focus()
+    expect(document.activeElement).toBe(submitBtn)
+    fireEvent.keyDown(window, { key: 'Tab', shiftKey: false })
+    expect(document.activeElement).toBe(closeBtn)
+
+    // Shift+Tab backward from first focusable wraps to last focusable (Create User button)
+    closeBtn.focus()
+    expect(document.activeElement).toBe(closeBtn)
+    fireEvent.keyDown(window, { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(submitBtn)
+  })
 })
