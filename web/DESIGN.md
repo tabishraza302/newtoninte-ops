@@ -222,6 +222,10 @@ Surfaces rely on structural 1px borders and tonal layering.
 - **Compact Membership Rows:** Keep member name and email together, with role controls and removal actions in the same row. On narrow screens, constrain long team names and slugs to the picker width and keep any table overflow local.
 - **Stable Search and Selection:** Search inputs preserve typed whitespace while results use trimmed search terms. Equivalent searches retain loaded results; closing the user-provisioning form restores the initial team-picker page on reopening.
 
+### Team Workspace
+- **Two-Section Layout:** `/teams` pairs a searchable team directory with the selected team's roster and lead-only invitation controls. Selecting a team uses `/teams/:id`, preserving direct links and role-based access.
+- **Mobile Drill-Down:** At viewport widths of 1024px or less, show the directory or detail rather than both. The "All teams" control returns to the directory and restores focus to the selected team.
+
 ### Team Invitations
 - **Lead-Only Dialog:** `+ Invite Member` opens a labelled modal with email and initial role only. Email receives initial focus; Tab stays inside, dismissal restores trigger focus, and closing discards the draft. The underlying Team content is inert and both body and app-shell scrolling are locked until closure.
 - **Submission Lifecycle:** Sending disables fields and dismissal controls until completion. Errors remain inside the dialog with the draft intact; success closes it and reports the invited address on the page.

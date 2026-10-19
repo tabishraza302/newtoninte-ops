@@ -87,8 +87,12 @@ describe('Team Page', () => {
     roleChangeError?: string
     inviteError?: { code: string; message: string; status?: number }
     deferInvite?: () => Promise<Response>
+    teams?: Array<{ id: number; name: string; slug: string; createdAt: string; updatedAt: string }>
+    memberships?: Array<{ teamId: number; role: 'lead' | 'member' | 'viewer' }>
   }) => {
     const role = opts?.userRole ?? 'lead'
+    const teamsList = opts?.teams ?? mockTeams
+    const membershipsList = opts?.memberships ?? [{ teamId: 1, role }]
     globalThis.fetch = vi.fn().mockImplementation((url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : url.toString()
 
@@ -109,7 +113,7 @@ describe('Team Page', () => {
           new Response(
             JSON.stringify({
               user: mockUser,
-              memberships: [{ teamId: 1, role }],
+              memberships: membershipsList,
             }),
             { status: 200, headers: { 'Content-Type': 'application/json' } },
           ),
@@ -135,6 +139,28 @@ describe('Team Page', () => {
 
       if (urlStr.includes('/teams/1/members') && init?.method === 'DELETE') {
         return Promise.resolve(new Response(null, { status: 204 }))
+      }
+
+      if (urlStr.includes('/teams/2/members')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              members: [
+                {
+                  id: 205,
+                  userId: 1,
+                  teamId: 2,
+                  role: 'member' as const,
+                  createdAt: '2026-01-01T00:00:00Z',
+                  updatedAt: '2026-01-01T00:00:00Z',
+                  user: { id: 1, displayName: 'Lead User', email: 'lead@newtonite.test' },
+                },
+              ],
+              nextCursor: null,
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          ),
+        )
       }
 
       if (urlStr.includes('/teams/1/members')) {
@@ -194,7 +220,7 @@ describe('Team Page', () => {
 
       if (urlStr.includes('/teams')) {
         return Promise.resolve(
-          new Response(JSON.stringify({ teams: mockTeams }), {
+          new Response(JSON.stringify({ teams: teamsList }), {
             status: 200,
             headers: { 'Content-Type': 'application/json' },
           }),
@@ -687,5 +713,144 @@ describe('Team Page', () => {
       expect(screen.getByText('Revoked')).toBeInTheDocument()
     })
     expect(screen.queryByRole('button', { name: /Revoke invitation for newbie@newtonite.test/i })).not.toBeInTheDocument()
+  })
+
+  it('renders two sections with teams directory on the left and team workspace on the right', async () => {
+    const multiTeams = [
+      { id: 1, name: 'Operations', slug: 'operations', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' },
+      { id: 2, name: 'Finance', slug: 'finance', createdAt: '2026-01-02T00:00:00Z', updatedAt: '2026-01-02T00:00:00Z' },
+      { id: 3, name: 'Inbox verification', slug: 'inbox-verification', createdAt: '2026-01-03T00:00:00Z', updatedAt: '2026-01-03T00:00:00Z' },
+    ]
+
+    setupFetch({
+      teams: multiTeams,
+      memberships: [
+        { teamId: 2, role: 'member' },
+        { teamId: 1, role: 'lead' },
+      ],
+    })
+
+    renderWithProviders(
+      <AuthContext.Provider value={createAuthContextValue()}>
+        <Team />
+      </AuthContext.Provider>,
+    )
+
+    // Section 1: Teams Directory
+    expect(await screen.findByRole('region', { name: /Teams directory/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'All Teams' })).toBeInTheDocument()
+    expect(screen.getByPlaceholderText(/Search by name or slug/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Operations/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Finance/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Inbox verification/i })).toBeInTheDocument()
+
+    // Section 2: Team Workspace Roster
+    expect(screen.getByRole('region', { name: /Team Workspace/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Finance' })).toBeInTheDocument()
+    expect(screen.getByText(/Your Role: member/i)).toBeInTheDocument()
+    expect(screen.getByText(/Team identifier:/i)).toBeInTheDocument()
+    expect(screen.getByText('finance')).toBeInTheDocument()
+  })
+
+  it('filters teams directory with search input', async () => {
+    const multiTeams = [
+      { id: 1, name: 'Operations', slug: 'operations', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' },
+      { id: 2, name: 'Finance', slug: 'finance', createdAt: '2026-01-02T00:00:00Z', updatedAt: '2026-01-02T00:00:00Z' },
+      { id: 3, name: 'Inbox verification', slug: 'inbox-verification', createdAt: '2026-01-03T00:00:00Z', updatedAt: '2026-01-03T00:00:00Z' },
+    ]
+
+    setupFetch({ teams: multiTeams })
+
+    renderWithProviders(
+      <AuthContext.Provider value={createAuthContextValue()}>
+        <Team />
+      </AuthContext.Provider>,
+    )
+
+    expect(await screen.findByRole('button', { name: /Operations/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Finance/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Inbox verification/i })).toBeInTheDocument()
+
+    const searchInput = screen.getByPlaceholderText(/Search by name or slug/i)
+    fireEvent.change(searchInput, { target: { value: 'fin' } })
+
+    expect(screen.getByRole('button', { name: /Finance/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Operations/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Inbox verification/i })).not.toBeInTheDocument()
+
+    fireEvent.change(searchInput, { target: { value: 'nomatch' } })
+    expect(screen.getByText(/No teams match your search/i)).toBeInTheDocument()
+  })
+
+  it('allows selecting another team from the directory and updates the workspace', async () => {
+    const multiTeams = [
+      { id: 1, name: 'Operations', slug: 'operations', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' },
+      { id: 2, name: 'Finance', slug: 'finance', createdAt: '2026-01-02T00:00:00Z', updatedAt: '2026-01-02T00:00:00Z' },
+    ]
+
+    setupFetch({
+      teams: multiTeams,
+      memberships: [{ teamId: 1, role: 'lead' }, { teamId: 2, role: 'member' }],
+    })
+
+    renderWithProviders(
+      <AuthContext.Provider value={createAuthContextValue()}>
+        <Routes>
+          <Route path="/teams" element={<Team />} />
+          <Route path="/teams/:id" element={<Team />} />
+        </Routes>
+      </AuthContext.Provider>,
+      { route: '/teams' },
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Operations' })).toBeInTheDocument()
+
+    const financeBtn = screen.getByRole('button', { name: /Finance/i })
+    fireEvent.click(financeBtn)
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Finance' })).toBeInTheDocument()
+    })
+    expect(screen.getByText('finance')).toBeInTheDocument()
+  })
+
+  it('drills into a team detail on single-column layouts and returns via All teams', async () => {
+    const multiTeams = [
+      { id: 1, name: 'Operations', slug: 'operations', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' },
+      { id: 2, name: 'Finance', slug: 'finance', createdAt: '2026-01-02T00:00:00Z', updatedAt: '2026-01-02T00:00:00Z' },
+    ]
+
+    setupFetch({ teams: multiTeams })
+    window.resizeTo(390, 844)
+
+    renderWithProviders(
+      <AuthContext.Provider value={createAuthContextValue()}>
+        <Routes>
+          <Route path="/teams" element={<Team />} />
+          <Route path="/teams/:id" element={<Team />} />
+        </Routes>
+      </AuthContext.Provider>,
+      { route: '/teams' },
+    )
+
+    await waitFor(() => {
+      expect(document.querySelector('.admin-teams-page')?.getAttribute('data-mobile-view')).toBe('list')
+    })
+
+    fireEvent.click(await screen.findByRole('button', { name: /Finance/i }))
+
+    await waitFor(() => {
+      expect(document.querySelector('.admin-teams-page')?.getAttribute('data-mobile-view')).toBe('detail')
+    })
+    expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Finance' }))
+
+    fireEvent.click(screen.getByRole('button', { name: /All teams/i }))
+
+    await waitFor(() => {
+      expect(document.querySelector('.admin-teams-page')?.getAttribute('data-mobile-view')).toBe('list')
+    })
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: /Finance/i }))
+    })
   })
 })

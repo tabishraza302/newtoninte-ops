@@ -19,12 +19,13 @@ import {
 } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
 import { commonStyles, theme, getApiErrorMessage } from '../theme'
-
+import { adminTeamsStyles } from './admin-teams/adminTeamsStyles'
+import { TeamsDirectory } from './admin-teams/TeamsDirectory'
 export function Team(): React.ReactElement {
   const { id } = useParams<{ id?: string }>()
   const navigate = useNavigate()
   const { user, status: authStatus } = useAuth()
-  const { data: teamsData, isLoading: teamsLoading, error: teamsError, refetch: refetchTeams } = useTeams()
+  const { data: teamsData, isLoading: teamsLoading, isFetching: teamsFetching, error: teamsError, refetch: refetchTeams } = useTeams()
   const { data: meData, isLoading: meLoading, error: meError, refetch: refetchMe } = useMe()
 
   const hasIdParam = id !== undefined
@@ -46,6 +47,58 @@ export function Team(): React.ReactElement {
   const currentMembership = userMemberships.find((m) => m.teamId === activeTeamId)
   const userRole: Role = currentMembership?.role ?? 'viewer'
   const isLead = userRole === 'lead'
+  // Directory & master-detail state
+  const [directorySearch, setDirectorySearch] = useState('')
+  const detailHeadingRef = useRef<HTMLHeadingElement | null>(null)
+  const directoryItemEls = useRef(new Map<number, HTMLButtonElement>())
+  const lastOpenTeamIdRef = useRef<number | null>(null)
+
+  const effectiveDirectorySearch = directorySearch.trim().toLowerCase()
+  const visibleTeams = effectiveDirectorySearch
+    ? teams.filter(
+        (t) =>
+          t.name.toLowerCase().includes(effectiveDirectorySearch) ||
+          t.slug.toLowerCase().includes(effectiveDirectorySearch),
+      )
+    : teams
+
+  const mobileView: 'list' | 'detail' = hasIdParam && isValidPositiveInt ? 'detail' : 'list'
+
+  useEffect(() => {
+    const singleColumn =
+      typeof window !== 'undefined' && window.matchMedia('(max-width: 1024px)').matches
+
+    if (mobileView !== 'detail' || !activeTeamId) {
+      const previousId = lastOpenTeamIdRef.current
+      lastOpenTeamIdRef.current = null
+      if (singleColumn && previousId !== null) directoryItemEls.current.get(previousId)?.focus()
+      return
+    }
+
+    lastOpenTeamIdRef.current = activeTeamId
+    if (!singleColumn) return
+
+    window.scrollTo({ top: 0, behavior: 'instant' })
+    detailHeadingRef.current?.focus()
+  }, [mobileView, activeTeamId])
+
+  const teamInitials = activeTeam?.name
+    ? activeTeam.name
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((p) => p[0]?.toUpperCase() ?? '')
+        .join('') || activeTeam.name.slice(0, 2).toUpperCase()
+    : 'TM'
+
+  const handleSelectTeam = (teamId: number): void => {
+    navigate(`/teams/${teamId}`)
+  }
+
+  const handleBackToDirectory = (): void => {
+    navigate('/teams')
+  }
+
   // Invitations state
   const [showInviteModal, setShowInviteModal] = useState(false)
   const [inviteEmail, setInviteEmail] = useState('')
@@ -462,120 +515,171 @@ export function Team(): React.ReactElement {
     <>
       <div
         ref={sectionRef}
-        className="team-page"
-        style={commonStyles.pageContainer}
+        className="team-page admin-teams-page"
+        data-mobile-view={mobileView}
+        style={{ ...commonStyles.pageContainer, maxWidth: '100%', boxSizing: 'border-box' }}
         inert={showInviteModal && isLead ? true : undefined}
         aria-hidden={showInviteModal && isLead ? 'true' : undefined}
       >
-      {/* Team Selection Bar if multiple teams */}
-      {teams.length > 1 && (
-        <nav
-          aria-label="Team switcher"
-          style={{
-            display: 'flex',
-            gap: '0.5rem',
-            marginBottom: '1.5rem',
-            overflowX: 'auto',
-            paddingBottom: '0.25rem',
-          }}
-        >
-          {teams.map((t) => {
-            const isSelected = t.id === activeTeamId
-            return (
-              <button
-                key={t.id}
-                type="button"
-                onClick={() => navigate(`/teams/${t.id}`)}
+        <style>{adminTeamsStyles}</style>
+
+        {/* Page Header */}
+        <header className="admin-teams-header">
+          <div className="admin-teams-header-text">
+            <h1 className="admin-teams-title">Team Workspace</h1>
+            <p className="admin-teams-subtitle">
+              Collaborate with team members, view rosters, and manage invitations.
+            </p>
+          </div>
+        </header>
+
+        {/* Two-Column Workbench Layout */}
+        <div className="admin-teams-workbench">
+          {/* Section 1: Teams Directory */}
+          <TeamsDirectory
+            teams={teams}
+            visibleTeams={visibleTeams}
+            selectedTeamId={activeTeamId ?? null}
+            onSelectTeam={handleSelectTeam}
+            searchInput={directorySearch}
+            onSearchChange={setDirectorySearch}
+            effectiveQ={effectiveDirectorySearch}
+            teamsLoading={teamsLoading}
+            teamsFetching={teamsFetching ?? false}
+            teamsError={null}
+            nextCursor={null}
+            onLoadMore={() => {}}
+            itemEls={directoryItemEls}
+          />
+
+          {/* Section 2: Team Workspace / Roster */}
+          <div className="team-roster-workspace" style={{ width: '100%', maxWidth: '100%' }}>
+            <button
+              type="button"
+              className="team-roster-back"
+              onClick={handleBackToDirectory}
+            >
+              <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+                <path
+                  d="M12.25 4.75 7 10l5.25 5.25"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.75"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              All teams
+            </button>
+
+            <section
+              aria-label="Team Workspace"
+              className="team-roster-panel"
+              style={{
+                ...commonStyles.cardPadded,
+                width: '100%',
+                maxWidth: '100%',
+                boxSizing: 'border-box',
+              }}
+            >
+              {/* Profile Header */}
+              <div
+                className="team-roster-header"
                 style={{
-                  padding: '0.45rem 0.85rem',
-                  borderRadius: '6px',
-                  fontSize: '0.8125rem',
-                  fontWeight: isSelected ? 600 : 500,
-                  backgroundColor: isSelected ? theme.colors.accent : '#ffffff',
-                  color: isSelected ? '#ffffff' : theme.colors.textSecondary,
-                  border: isSelected ? `1px solid ${theme.colors.accent}` : `1px solid ${theme.colors.border}`,
-                  cursor: 'pointer',
-                  fontFamily: 'inherit',
-                  whiteSpace: 'nowrap',
-                  transition: 'all 0.15s ease',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'flex-start',
+                  flexWrap: 'wrap',
+                  gap: '1rem',
+                  marginBottom: '1.25rem',
+                  paddingBottom: '1.25rem',
+                  borderBottom: '1px solid #f1f5f9',
+                  width: '100%',
+                  maxWidth: '100%',
+                  boxSizing: 'border-box',
                 }}
               >
-                {t.name}
-              </button>
-            )
-          })}
-        </nav>
-      )}
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.875rem' }}>
+                  <div
+                    aria-hidden="true"
+                    style={{
+                      width: '2.5rem',
+                      height: '2.5rem',
+                      borderRadius: '8px',
+                      backgroundColor: '#f0fdfa',
+                      color: '#0f766e',
+                      display: 'grid',
+                      placeItems: 'center',
+                      fontWeight: 700,
+                      fontSize: '0.9375rem',
+                      flexShrink: 0,
+                      border: '1px solid #ccfbf1',
+                    }}
+                  >
+                    {teamInitials}
+                  </div>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap', marginBottom: '0.25rem' }}>
+                      <h2
+                        ref={detailHeadingRef}
+                        tabIndex={-1}
+                        className="roster-heading"
+                        style={{
+                          fontSize: '1.5rem',
+                          fontWeight: 800,
+                          color: theme.colors.textPrimary,
+                          margin: 0,
+                          letterSpacing: '-0.02em',
+                        }}
+                      >
+                        {activeTeam?.name ?? 'Team Workspace'}
+                      </h2>
+                      <span
+                        style={{
+                          display: 'inline-block',
+                          padding: '0.2rem 0.55rem',
+                          borderRadius: '9999px',
+                          fontSize: '0.6875rem',
+                          fontWeight: 700,
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.04em',
+                          backgroundColor: isLead ? '#ecfdf5' : '#f0fdfa',
+                          color: isLead ? '#047857' : '#0f766e',
+                          border: isLead ? '1px solid #a7f3d0' : '1px solid #ccfbf1',
+                        }}
+                      >
+                        Your Role: {userRole}
+                      </span>
+                    </div>
+                    <p style={{ color: theme.colors.textMuted, fontSize: '0.875rem', margin: 0 }}>
+                      {activeTeam?.slug ? (
+                        <span>
+                          Team identifier: <code style={{ fontVariantNumeric: 'tabular-nums' }}>{activeTeam.slug}</code>
+                        </span>
+                      ) : (
+                        'Manage members and invitations for your team'
+                      )}
+                    </p>
+                  </div>
+                </div>
 
-      {/* Team Header */}
-      <header
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'flex-start',
-          flexWrap: 'wrap',
-          gap: '1rem',
-          marginBottom: '1.75rem',
-        }}
-      >
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.25rem' }}>
-            <h1
-              style={{
-                fontSize: '1.75rem',
-                fontWeight: 800,
-                color: theme.colors.textPrimary,
-                margin: 0,
-                letterSpacing: '-0.02em',
-              }}
-            >
-              {activeTeam?.name ?? 'Team Workspace'}
-            </h1>
-            <span
-              style={{
-                display: 'inline-block',
-                padding: '0.2rem 0.55rem',
-                borderRadius: '9999px',
-                fontSize: '0.6875rem',
-                fontWeight: 700,
-                textTransform: 'uppercase',
-                letterSpacing: '0.04em',
-                backgroundColor: isLead ? '#ecfdf5' : '#f0fdfa',
-                color: isLead ? '#047857' : '#0f766e',
-                border: isLead ? '1px solid #a7f3d0' : '1px solid #ccfbf1',
-              }}
-            >
-              Your Role: {userRole}
-            </span>
-          </div>
-          <p style={{ color: theme.colors.textMuted, fontSize: '0.875rem', margin: 0 }}>
-            {activeTeam?.slug ? (
-              <span>
-                Team identifier: <code style={{ fontVariantNumeric: 'tabular-nums' }}>{activeTeam.slug}</code>
-              </span>
-            ) : (
-              'Manage members and invitations for your team'
-            )}
-          </p>
-        </div>
-
-        {isLead && (
-          <button
-            ref={inviteTriggerRef}
-            type="button"
-            onClick={() => {
-              setInviteError(null)
-              setInviteSuccess(null)
-              setInviteEmail('')
-              setInviteRole('member')
-              setShowInviteModal(true)
-            }}
-            style={commonStyles.buttonPrimary}
-          >
-            <span>+ Invite Member</span>
-          </button>
-        )}
-      </header>
+                {isLead && (
+                  <button
+                    ref={inviteTriggerRef}
+                    type="button"
+                    onClick={() => {
+                      setInviteError(null)
+                      setInviteSuccess(null)
+                      setInviteEmail('')
+                      setInviteRole('member')
+                      setShowInviteModal(true)
+                    }}
+                    className="admin-teams-create-btn"
+                  >
+                    <span>+ Invite Member</span>
+                  </button>
+                )}
+              </div>
 
 
       {/* Status Messages */}
@@ -599,7 +703,7 @@ export function Team(): React.ReactElement {
 
       {/* Members Section */}
       <section aria-label="Team Members" style={{ marginBottom: '2.5rem' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.875rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.875rem' }}>
           <h2 style={{ fontSize: '1.125rem', fontWeight: 700, color: theme.colors.textPrimary, margin: 0 }}>
             Members ({allMembers.length})
           </h2>
@@ -844,7 +948,7 @@ export function Team(): React.ReactElement {
       {/* Invitations Section (Lead Only) */}
       {isLead && (
         <section aria-label="Team Invitations">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.875rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.875rem' }}>
             <h2 style={{ fontSize: '1.125rem', fontWeight: 700, color: theme.colors.textPrimary, margin: 0 }}>
               Active Invitations
             </h2>
@@ -1043,6 +1147,9 @@ export function Team(): React.ReactElement {
           )}
         </section>
       )}
+            </section>
+          </div>
+        </div>
       </div>
       {showInviteModal && isLead && (
         <div

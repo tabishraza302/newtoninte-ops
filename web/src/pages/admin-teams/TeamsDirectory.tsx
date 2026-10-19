@@ -126,7 +126,7 @@ export function TeamsDirectory({
         </div>
       )}
 
-      {!teamsLoading && !teamsError && teams.length === 0 && !!effectiveQ && (
+      {!teamsLoading && !teamsError && visibleTeams.length === 0 && !!effectiveQ && (
         <div role="status" style={{ color: '#64748b', fontSize: '0.875rem', padding: '0.5rem 0' }}>
           No teams match your search.
         </div>
